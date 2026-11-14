@@ -1,0 +1,32 @@
+{
+  "name": "mission-ai-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI capability discovery, feasibility assessment and runtime development core for a shared MR/Web mission design workspace",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx src/server/main.ts",
+    "start": "tsx src/server/main.ts",
+    "mcp": "tsx src/mcp/stdio.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "ajv": "^8.17.1",
+    "quickjs-emscripten": "^0.32.0",
+    "tsx": "^4.23.15",
+    "typescript": "~5.9.3",
+    "ws": "^8.23.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.1",
+    "vitest": "^5.1.0"
+  }
+}

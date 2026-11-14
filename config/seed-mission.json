@@ -1,0 +1,63 @@
+{
+  "meta": {
+    "name": "Lunar South Pole Scout",
+    "description": "Relay orbiter in a 100 km polar lunar orbit supporting a small surface rover near the south pole.",
+    "massLimitKg": 180,
+    "yearsInService": 0
+  },
+  "missionTime": "2027-03-01T00:00:00Z",
+  "centralBody": "moon",
+  "orbit": {
+    "semiMajorAxisKm": 1837.4,
+    "eccentricity": 0,
+    "inclinationDeg": 90,
+    "raanDeg": 0,
+    "argPeriapsisDeg": 0,
+    "trueAnomalyDeg": 0,
+    "epoch": "2027-03-01T00:00:00Z"
+  },
+  "spacecraft": {
+    "name": "Relay Orbiter",
+    "busDryMassKg": 95,
+    "components": [
+      { "id": "sp1", "type": "solar_panel", "name": "Solar array +Y", "massKg": 4.2, "areaM2": 1.2, "efficiency": 0.295, "pointingLoss": 0.1, "degradationPerYear": 0.02 },
+      { "id": "bat1", "type": "battery", "name": "Li-ion battery", "massKg": 6.5, "capacityWh": 800, "maxDepthOfDischarge": 0.4 },
+      { "id": "ant1", "type": "antenna", "name": "X-band high-gain antenna", "massKg": 3.1, "frequencyGHz": 8.45, "diameterM": 0.6, "txPowerW": 10, "dcPowerW": 45, "dutyCycle": 0.3, "dataRateBps": 2000000, "otherLossesDb": 3, "requiredEbN0Db": 4.5 },
+      { "id": "avionics", "type": "load", "name": "Avionics and thermal", "massKg": 12, "powerW": 85, "dutyCycle": 1 },
+      { "id": "payload", "type": "load", "name": "Relay payload", "massKg": 9, "powerW": 60, "dutyCycle": 0.5 }
+    ]
+  },
+  "groundStation": {
+    "name": "34 m deep-space station",
+    "antennaGainDbi": 68.2,
+    "systemNoiseTempK": 30,
+    "minElevationDeg": 10
+  },
+  "rover": {
+    "name": "Scout Rover",
+    "chassisMassKg": 22,
+    "wheelCount": 4,
+    "wheelRadiusM": 0.12,
+    "wheelMassKg": 0.9,
+    "wheelTorqueNm": 3.5,
+    "supportHalfSpanM": 0.3,
+    "centerOfMassHeightM": 0.28,
+    "speedMS": 0.1,
+    "drivetrainEfficiency": 0.6,
+    "components": [
+      { "id": "rsp1", "type": "solar_panel", "name": "Rover deck array", "massKg": 1.1, "areaM2": 0.35, "efficiency": 0.28, "pointingLoss": 0.5, "degradationPerYear": 0.02 },
+      { "id": "rbat1", "type": "battery", "name": "Rover battery", "massKg": 2.4, "capacityWh": 300, "maxDepthOfDischarge": 0.6 },
+      { "id": "rcpu", "type": "load", "name": "Rover avionics", "massKg": 1.8, "powerW": 18, "dutyCycle": 1 }
+    ],
+    "site": {
+      "body": "moon",
+      "name": "Shackleton connecting ridge",
+      "slopeDeg": 12,
+      "tractionCoefficient": 0.55,
+      "rollingResistanceCoefficient": 0.15
+    }
+  },
+  "scene": { "nodes": [] },
+  "assets": [],
+  "scripts": []
+}

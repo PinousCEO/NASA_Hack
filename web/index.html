@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mission Workspace</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --line:#2a313c; --text:#e6edf3; --dim:#8b949e; --accent:#4c9aff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, "Segoe UI", sans-serif; }
+  header { display:flex; gap:16px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; }
+  header .spacer { flex:1; }
+  main { display:grid; grid-template-columns: minmax(280px, 1fr) minmax(360px, 1.5fr) minmax(300px, 1.1fr); gap:12px; padding:12px; align-items:start; }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:12px; min-width:0; }
+  h2 { font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--dim); margin:0 0 8px; }
+  h3 { font-size:13px; margin:12px 0 4px; }
+  textarea, input, select, button { font:inherit; color:inherit; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:6px 8px; }
+  textarea { width:100%; min-height:64px; resize:vertical; }
+  button { cursor:pointer; background:#21262d; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#04101f; font-weight:600; }
+  button.danger { border-color:var(--bad); color:var(--bad); }
+  button:disabled { opacity:.5; cursor:default; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+  .dim { color:var(--dim); } .small { font-size:12px; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; border:1px solid var(--line); white-space:nowrap; }
+  .ok { color:var(--ok); border-color:var(--ok); } .warn { color:var(--warn); border-color:var(--warn); } .bad { color:var(--bad); border-color:var(--bad); } .info { color:var(--accent); border-color:var(--accent); }
+  .item { padding:8px; border:1px solid var(--line); border-radius:6px; margin-top:6px; cursor:pointer; }
+  .item.selected { border-color:var(--accent); }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  td, th { text-align:left; padding:3px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  td:last-child { overflow-wrap:anywhere; }
+  th { color:var(--dim); font-weight:500; }
+  pre { margin:4px 0 0; padding:8px; background:var(--bg); border-radius:6px; overflow:auto; max-height:220px; font-size:11px; white-space:pre-wrap; word-break:break-word; }
+  details { margin-top:4px; } summary { cursor:pointer; }
+  #view { width:100%; height:260px; border-radius:6px; background:#05070a; display:block; }
+  .examples button { font-size:12px; padding:3px 8px; }
+</style>
+<script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }</script>
+</head>
+<body>
+<header>
+  <h1 id="missionName">Mission Workspace</h1>
+  <span class="pill info" id="versionPill">v–</span>
+  <span class="pill" id="llmPill">model: –</span>
+  <span class="pill" id="wsPill">offline</span>
+  <span class="spacer"></span>
+  <label class="small dim">User <input id="userId" value="engineer-1" size="12"></label>
+  <label class="small dim">Role <select id="userRole"><option>viewer</option><option selected>engineer</option><option>lead</option></select></label>
+</header>
+<main>
+  <div>
+    <section>
+      <h2>Request</h2>
+      <textarea id="requestText" placeholder="Describe what you want, e.g. “Add a 0.8 m2 solar panel”"></textarea>
+      <div class="row">
+        <button class="primary" id="submit">Submit</button>
+        <label class="small dim"><input type="checkbox" id="consent"> allow this record to be considered for model training (after quality review)</label>
+      </div>
+      <div class="row examples" id="examples"></div>
+    </section>
+    <section><h2>Requests</h2><div id="requests" class="dim small">No requests yet.</div></section>
+    <section><h2>Capabilities</h2><input id="capQuery" placeholder="Search capabilities…" style="width:100%"><div id="capabilities"></div></section>
+  </div>
+  <div>
+    <section><h2>Request detail</h2><div id="detail" class="dim small">Select a request to see its analysis, feasibility, plan, trace and proposal.</div></section>
+  </div>
+  <div>
+    <section><h2>Shared scene</h2><canvas id="view"></canvas>
+      <div class="row"><button id="modeOrbit">Orbit</button><button id="modeAssembly">Assembly</button><span class="small dim" id="viewNote"></span></div>
+    </section>
+    <section><h2>Mission state</h2><div id="state"></div></section>
+    <section><h2>Versions</h2><div id="versions"></div></section>
+  </div>
+</main>
+<script type="module">
+const $ = (id) => document.getElementById(id);
+/** DOM builder: all text goes through textContent, never innerHTML. */
+function h(tag, props = {}, ...children) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === "class") el.className = v; else if (k.startsWith("on")) el.addEventListener(k.slice(2), v); else if (v !== undefined && v !== false) el.setAttribute(k, v);
+  }
+  for (const c of children.flat()) if (c !== null && c !== undefined && c !== false) el.append(c.nodeType ? c : document.createTextNode(String(c)));
+  return el;
+}
+const user = () => ({ id: $("userId").value.trim() || "anonymous", role: $("userRole").value });
+async function api(method, route, body) {
+  const res = await fetch(route, { method, headers: body ? { "content-type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? res.statusText);
+  return data;
+}
+const tone = (s) => ({ pass: "ok", ok: "ok", succeeded: "ok", completed: "ok", published: "ok", feasible: "ok", available: "ok", warn: "warn", concern: "warn", awaiting_approval: "warn", awaiting_clarification: "warn", feasible_with_modifications: "warn", scientifically_unverified: "warn", degraded: "warn",
+  fail: "bad", blocker: "bad", failed: "bad", infeasible: "bad", rejected: "bad", unavailable: "bad", currently_unsupported: "bad", requires_additional_resources: "bad", requires_further_research: "bad" }[s] ?? "info");
+const pill = (text, kind) => h("span", { class: `pill ${kind ?? tone(text)}` }, String(text).replace(/_/g, " "));
+const fmt = (v) => typeof v === "number" ? (Number.isInteger(v) ? String(v) : v.toPrecision(5)) : v === null || v === undefined ? "–" : typeof v === "object" ? JSON.stringify(v) : String(v);
+const json = (v) => h("pre", {}, JSON.stringify(v, null, 2));
+
+let mission = null, selected = null, requests = [], mode = "orbit";
+
+// ---------- Mission state ----------
+function renderMission() {
+  if (!mission) return;
+  $("missionName").textContent = mission.config.meta.name;
+  $("versionPill").textContent = `v${mission.version}`;
+  const d = (id) => mission.derived[id]?.value ?? {};
+  const rows = [
+    ["Mission time", mission.config.missionTime], ["Central body", mission.config.centralBody],
+    ["Orbit period", `${(d("orbit.elements").periodS / 60).toFixed(1)} min`], ["Periapsis altitude", `${fmt(d("orbit.elements").periapsisAltitudeKm)} km`],
+    ["Beta angle / eclipse", `${fmt(d("orbit.eclipse").betaDeg)}° / ${(d("orbit.eclipse").eclipseFraction * 100).toFixed(1)} %`],
+    ["Sun distance", `${fmt(d("ephemeris.sun").distanceAu)} AU`],
+    ["Power generation / load", `${fmt(d("power.budget").orbitAverageGenerationW)} / ${fmt(d("power.budget").averageLoadW)} W`], ["Power margin", `${fmt(d("power.budget").marginW)} W`],
+    ["Worst link margin", `${fmt(d("comms.link").worstMarginDb)} dB`], ["Total mass", `${fmt(d("mass.budget").totalMassKg)} kg (margin ${fmt(d("mass.budget").marginKg)})`],
+    ["Rover max slope", mission.config.rover ? `${fmt(d("rover.performance").maxClimbSlopeDeg)}° (${d("rover.performance").limitingFactor}); site ${mission.config.rover.site.slopeDeg}°` : "no rover"],
+  ];
+  const assumptions = Object.entries(mission.derived).flatMap(([id, n]) => n.assumptions.map((a) => `${id}: ${a}`));
+  $("state").replaceChildren(
+    h("table", {}, rows.map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))),
+    h("h3", {}, "Components"),
+    h("table", {}, [...mission.config.spacecraft.components, ...(mission.config.rover?.components ?? [])].map((c) => h("tr", {}, h("td", {}, c.id), h("td", {}, c.type), h("td", {}, c.name), h("td", {}, `${c.massKg.toFixed(1)} kg`)))),
+    h("details", {}, h("summary", { class: "small dim" }, `Model assumptions (${assumptions.length}) — all results are deterministic calculations`), h("pre", {}, assumptions.join("\n"))),
+    h("details", {}, h("summary", { class: "small dim" }, `Recalculated in this version: ${mission.recalculated.join(", ") || "–"}`), json(mission.config)),
+  );
+  updateScene();
+}
+async function renderVersions() {
+  const versions = await api("GET", "/api/mission/versions");
+  $("versions").replaceChildren(h("table", {}, versions.slice().reverse().map((v) => h("tr", {},
+    h("td", {}, `v${v.version}`), h("td", {}, v.note, h("div", { class: "dim small" }, `${v.publishedBy} · ${new Date(v.publishedAt).toLocaleString()}`)),
+    h("td", {}, v.version !== mission?.version ? h("button", { onclick: async () => {
+      const reason = prompt(`Roll back to v${v.version}? Reason:`); if (reason === null) return;
+      try { await api("POST", "/api/mission/rollback", { user: user(), version: v.version, reason }); } catch (e) { alert(e.message); }
+    } }, "Roll back") : pill("current", "ok"))))));
+}
+
+// ---------- Requests ----------
+function renderRequests() {
+  if (!requests.length) return;
+  $("requests").className = "";
+  $("requests").replaceChildren(...requests.map((r) => h("div", { class: `item ${r.id === selected ? "selected" : ""}`, onclick: () => select(r.id) },
+    h("div", {}, r.text), h("div", { class: "row" }, pill(r.status), r.feasibility ? pill(r.feasibility) : null, h("span", { class: "dim small" }, `${r.user.id} · ${new Date(r.updatedAt).toLocaleTimeString()}`)))));
+}
+async function refreshRequests() { requests = await api("GET", "/api/requests"); renderRequests(); }
+// Deep link: #request=<id>&view=orbit|assembly
+const link = new URLSearchParams(location.hash.slice(1));
+const writeLink = () => { if (selected) link.set("request", selected); link.set("view", mode); history.replaceState(null, "", `#${link}`); };
+async function select(id) { selected = id; writeLink(); renderRequests(); await renderDetail(); }
+
+async function renderDetail() {
+  if (!selected) return;
+  const r = await api("GET", `/api/requests/${selected}`);
+  const out = [h("div", { class: "row" }, pill(r.status), h("b", {}, r.text))];
+  if (r.error) out.push(h("div", { class: "bad small" }, r.error));
+  if (r.requirement) {
+    const q = r.requirement;
+    out.push(h("h3", {}, "Requirement analysis "), h("div", { class: "small dim" }, `${q.analysis.method === "llm" ? `Language model (${q.analysis.modelId}) — model judgement` : "Rule-based pattern analyser — heuristic"} · inspected mission v${q.missionVersionInspected}`),
+      h("table", {}, q.operations.map((o) => h("tr", {}, h("td", {}, pill(o.category, "info")), h("td", {}, o.description, o.assumptions.length ? h("div", { class: "warn small" }, `Assumed: ${o.assumptions.join("; ")}`) : null)))));
+    if (r.status === "awaiting_clarification") {
+      const answer = h("input", { placeholder: "Your answer…", style: "flex:1" });
+      out.push(...q.missingInformation.map((m) => h("div", { class: "warn" }, m.question)), h("div", { class: "row" }, answer, h("button", { class: "primary", onclick: async () => {
+        try { await api("POST", `/api/requests/${r.id}/clarify`, { answer: answer.value }); } catch (e) { alert(e.message); }
+      } }, "Answer")));
+    }
+  }
+  if (r.similarPastWork?.length) out.push(h("h3", {}, "Similar past work"), h("table", {}, r.similarPastWork.map((m) => h("tr", {}, h("td", {}, pill(m.kind, "info")), h("td", {}, m.summary), h("td", {}, m.score.toFixed(2))))));
+  if (r.feasibility) {
+    const f = r.feasibility;
+    out.push(h("h3", {}, "Feasibility ", pill(f.classification)), h("div", { class: "small" }, f.summary),
+      h("table", {}, f.factors.map((x) => h("tr", {}, h("td", {}, pill(x.status)), h("td", {}, x.factor), h("td", {}, x.detail, h("div", { class: "dim small" }, `basis: ${x.basis.replace(/_/g, " ")}`))))),
+      f.suggestedModifications.length ? h("div", { class: "warn small" }, `Suggested: ${f.suggestedModifications.join(" ")}`) : null);
+  }
+  if (r.plan?.tasks.length) {
+    out.push(h("h3", {}, `Plan (${r.plan.createdBy} planner) `, pill(r.plan.status), r.plan.rolledBack ? pill("rolled back", "bad") : null),
+      h("table", {}, h("tr", {}, ["Task", "Capability", "Depends on", "Status"].map((t) => h("th", {}, t))), r.plan.tasks.map((t) => h("tr", {},
+        h("td", {}, t.id, h("div", { class: "dim small" }, t.description)),
+        h("td", {}, t.executedBy ?? t.capabilityId, h("details", {}, h("summary", { class: "dim small" }, "why / result"), h("div", { class: "small" }, t.selectionReason),
+          t.result ? h("div", { class: "small dim" }, `evidence: ${t.result.verification.replace(/_/g, " ")}${t.result.assumptions.length ? ` · assumptions: ${t.result.assumptions.join("; ")}` : ""}`) : null, t.result ? json(t.result.output) : null)),
+        h("td", {}, t.dependsOn.join(", ") || "–"), h("td", {}, pill(t.status), t.error ? h("div", { class: "bad small" }, t.error) : null)))));
+    if (["planning", "executing", "analyzing"].includes(r.status)) out.push(h("button", { class: "danger", onclick: () => api("POST", `/api/requests/${r.id}/cancel`).catch((e) => alert(e.message)) }, "Cancel"));
+  }
+  if (r.planIssues?.length) out.push(h("h3", {}, "Planning issues"), ...r.planIssues.map((i) => h("div", { class: "bad small" }, `${i.kind.replace(/_/g, " ")}: ${i.detail}`)));
+  if (r.proposalId) out.push(await renderProposal(r.proposalId));
+  out.push(h("details", {}, h("summary", {}, `Trace (${r.trace.length} events): tools selected, inputs, outputs, tests, decisions`),
+    h("table", {}, r.trace.map((e) => h("tr", {}, h("td", {}, pill(e.stage, "info")), h("td", {}, e.message, e.data !== undefined ? h("details", {}, h("summary", { class: "dim small" }, "data"), json(e.data)) : null))))));
+  $("detail").className = "";
+  $("detail").replaceChildren(...out.filter(Boolean));
+}
+
+async function renderProposal(id) {
+  const p = await api("GET", `/api/proposals/${id}`);
+  const reason = h("input", { placeholder: "Reason for the decision", style: "flex:1" });
+  const decide = (action) => async () => { try { await api("POST", `/api/proposals/${id}/${action}`, { user: user(), reason: reason.value }); await renderDetail(); } catch (e) { alert(e.message); } };
+  return h("div", {},
+    h("h3", {}, "Proposed change ", pill(p.status), " ", pill(`${p.significance} · approver: ${p.requiredRole}`, "info"), " ", pill(`evidence: ${p.evidence}`, ["model_judgment", "unverified"].includes(p.evidence) ? "warn" : "ok")),
+    h("div", { class: "small" }, p.preview.explanation.map((line) => h("div", {}, line))),
+    h("h3", {}, "Configuration changes"), h("table", {}, p.preview.configDiff.map((d) => h("tr", {}, h("td", {}, pill(d.kind, "info")), h("td", {}, d.path), h("td", {}, `${fmt(d.before)} → ${fmt(d.after)}`)))),
+    h("div", { class: "small dim" }, `Affected: ${p.preview.affectedComponents.join(", ")}`),
+    h("h3", {}, "Consequences (recalculated)"), h("table", {}, p.preview.consequences.slice(0, 40).map((c) => h("tr", {}, h("td", {}, c.node), h("td", {}, c.metric), h("td", {}, `${fmt(c.before)} → ${fmt(c.after)}`)))),
+    h("h3", {}, "Automated tests"), h("table", {}, p.tests.map((t) => h("tr", {}, h("td", {}, pill(t.status)), h("td", {}, t.description, h("div", { class: "dim small" }, t.detail))))),
+    p.status === "awaiting_approval" ? h("div", { class: "row" }, reason, h("button", { class: "primary", onclick: decide("approve") }, "Approve & publish"), h("button", { class: "danger", onclick: decide("reject") }, "Reject"))
+      : p.decision ? h("div", { class: "small dim" }, `${p.decision.action} by ${p.decision.by.id} (${p.decision.by.role}): ${p.decision.reason || "no reason given"}`) : null);
+}
+
+// ---------- Capabilities ----------
+async function renderCapabilities() {
+  const q = $("capQuery").value.trim();
+  const caps = await api("GET", `/api/capabilities${q ? `?q=${encodeURIComponent(q)}` : ""}`);
+  $("capabilities").replaceChildren(...caps.map((c) => h("details", {}, h("summary", {}, c.id, " ", pill(c.developmentStatus === "planned" ? "planned" : c.availability.status, c.developmentStatus === "planned" ? "bad" : undefined)),
+    h("div", { class: "small" }, c.description), c.availability.reason ? h("div", { class: "small bad" }, c.availability.reason) : null,
+    h("div", { class: "small dim" }, `${c.category.replace(/_/g, " ")} · v${c.version} · evidence: ${c.outputVerification.replace(/_/g, " ")} · implementation: ${c.verification.status.replace(/_/g, " ")} · permissions: ${c.requiredPermissions.join(", ") || "none"} · calls: ${c.stats.calls} (${c.stats.failures} failed)`),
+    json({ provides: c.provides, inputSchema: c.inputSchema, constraints: c.constraints, resources: c.resources, dependencies: c.dependencies }))));
+}
+
+// ---------- 3D view (optional: degrades gracefully if the CDN is unreachable) ----------
+let three = null;
+async function initScene() {
+  try {
+    const THREE = await import("three");
+    const { OrbitControls } = await import("three/addons/controls/OrbitControls.js");
+    const { GLTFLoader } = await import("three/addons/loaders/GLTFLoader.js");
+    const canvas = $("view");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000);
+    const controls = new OrbitControls(camera, canvas);
+    const sun = new THREE.DirectionalLight(0xffffff, 3);
+    scene.add(sun, new THREE.AmbientLight(0xffffff, 0.25));
+    const content = new THREE.Group();
+    scene.add(content);
+    three = { THREE, renderer, scene, camera, controls, sun, content, loader: new GLTFLoader() };
+    const loop = () => { const w = canvas.clientWidth, hgt = canvas.clientHeight; if (canvas.width !== w || canvas.height !== hgt) { renderer.setSize(w, hgt, false); camera.aspect = w / hgt; camera.updateProjectionMatrix(); } controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop); };
+    loop();
+    updateScene();
+  } catch { $("viewNote").textContent = "3D view unavailable (could not load three.js)."; }
+}
+function updateScene() {
+  if (!three || !mission) return;
+  const { THREE, content, camera, sun, loader, controls } = three;
+  content.clear();
+  // Inertial equatorial frame (z = north) → three.js (y up).
+  const toView = ([x, y, z]) => new THREE.Vector3(x, z, -y);
+  const light = mission.derived["scene.lighting"]?.value;
+  if (light) { sun.position.copy(toView(light.sunDirection).multiplyScalar(50)); sun.intensity = 3 * Math.min(2, light.relativeIntensity); }
+  if (mode === "orbit") {
+    const radiusKm = { earth: 6378.137, moon: 1737.4, mars: 3396.19 }[mission.config.centralBody];
+    const color = { earth: 0x3b6fb5, moon: 0x9a9a9a, mars: 0xb5583b }[mission.config.centralBody];
+    content.add(new THREE.Mesh(new THREE.SphereGeometry(1, 48, 24), new THREE.MeshStandardMaterial({ color, roughness: 1 })));
+    const traj = mission.derived["orbit.trajectory"]?.value;
+    if (traj) {
+      const pts = traj.pathKm.map((p) => toView(p.map((v) => v / radiusKm)));
+      content.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x4c9aff })));
+      const craft = new THREE.Mesh(new THREE.SphereGeometry(0.04, 16, 8), new THREE.MeshBasicMaterial({ color: 0xffd33d }));
+      craft.position.copy(toView(traj.currentPositionKm.map((v) => v / radiusKm)));
+      content.add(craft);
+    }
+    if (light) content.add(new THREE.ArrowHelper(toView(light.sunDirection).normalize(), new THREE.Vector3(), 2.2, 0xffd33d, 0.15, 0.08));
+    camera.position.set(3, 2, 3.5); controls.target.set(0, 0, 0);
+    $("viewNote").textContent = "Body, orbit path, spacecraft position and Sun direction from the derived results.";
+  } else {
+    const nodes = mission.config.scene.nodes.filter((n) => n.assetId);
+    nodes.forEach((n, i) => {
+      const asset = mission.config.assets.find((a) => a.id === n.assetId);
+      if (!asset) return;
+      loader.load(asset.uri, (gltf) => {
+        const atOrigin = n.position.every((v) => v === 0);
+        gltf.scene.position.set(...(atOrigin ? [(i - (nodes.length - 1) / 2) * 1.5, 0, 0] : n.position));
+        gltf.scene.rotation.set(...n.rotationEulerDeg.map((d) => d * Math.PI / 180));
+        gltf.scene.scale.set(...n.scale);
+        content.add(gltf.scene);
+      });
+    });
+    camera.position.set(1.5, 1.2, 2.5); controls.target.set(0, 0, 0);
+    $("viewNote").textContent = nodes.length ? `${nodes.length} scene node(s) with GLB assets.` : "No scene nodes with assets yet — add a component to generate one.";
+  }
+}
+$("modeOrbit").onclick = () => { mode = "orbit"; writeLink(); updateScene(); };
+$("modeAssembly").onclick = () => { mode = "assembly"; writeLink(); updateScene(); };
+
+// ---------- Live updates ----------
+function connect() {
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  ws.onopen = () => { $("wsPill").textContent = "live"; $("wsPill").className = "pill ok"; };
+  ws.onclose = () => { $("wsPill").textContent = "offline"; $("wsPill").className = "pill bad"; setTimeout(connect, 2000); };
+  let pending = false;
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.type === "mission.snapshot" || msg.type === "mission.version_published") { mission = msg.mission; renderMission(); renderVersions(); }
+    if (msg.type === "request.updated") {
+      const i = requests.findIndex((r) => r.id === msg.request.id);
+      if (i >= 0) requests[i] = msg.request; else requests.unshift(msg.request);
+      renderRequests();
+      if (msg.request.id === selected && !pending) { pending = true; setTimeout(() => { pending = false; renderDetail(); }, 150); }
+    }
+    if (msg.type === "capability.changed") renderCapabilities();
+  };
+}
+
+$("submit").onclick = async () => {
+  const text = $("requestText").value.trim();
+  if (!text) return;
+  try { const r = await api("POST", "/api/requests", { text, user: user(), trainingConsent: $("consent").checked }); $("requestText").value = ""; await refreshRequests(); await select(r.id); }
+  catch (e) { alert(e.message); }
+};
+for (const example of ["What is the orbital period?", "Set orbit altitude to 150 km", "Add a 0.8 m2 solar panel", "Simulate the battery over 10 orbits", "Can the rover climb a 25 deg slope?", "Where is Mars?", "set spacecraft.components.sp1.areaM2 to 0.2"]) {
+  $("examples").append(h("button", { onclick: () => { $("requestText").value = example; } }, example));
+}
+$("capQuery").oninput = () => renderCapabilities();
+api("GET", "/api/health").then((health) => { $("llmPill").textContent = health.llm.available ? `model: ${health.llm.modelId}` : "model: none (rule-based analysis)"; $("llmPill").className = `pill ${health.llm.available ? "ok" : "warn"}`; });
+if (link.get("view") === "assembly") mode = "assembly";
+connect(); renderCapabilities(); initScene();
+refreshRequests().then(() => { const id = link.get("request"); if (id && requests.some((r) => r.id === id)) select(id); });
+</script>
+</body>
+</html>
