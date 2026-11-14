@@ -21,7 +21,11 @@ export type MemoryKind =
   | "validation_report"
   | "failure"
   | "improvement"
-  | "mission_outcome";
+  | "mission_outcome"
+  | "mission_problem"
+  | "user_contribution"
+  | "ai_evaluation"
+  | "trade_study";
 
 export interface MemoryRecord {
   id: string;
@@ -88,6 +92,10 @@ export class ResearchMemory {
 
   get(id: string): MemoryRecord | undefined {
     return this.records.get(id);
+  }
+
+  all(): MemoryRecord[] {
+    return [...this.records.values()];
   }
 
   forRequest(requestId: string): MemoryRecord[] {

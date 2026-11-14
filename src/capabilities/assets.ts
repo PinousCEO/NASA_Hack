@@ -94,6 +94,10 @@ export function assetSpecForComponent(component: Component): AssetSpec {
     }
     case "load":
       return { kind: "box", widthM: 0.2, heightM: 0.1, depthM: 0.15 };
+    case "instrument":
+      return component.apertureM !== undefined
+        ? { kind: "cylinder", radiusM: component.apertureM / 2, heightM: component.apertureM * 2.5 }
+        : { kind: "box", widthM: 0.18, heightM: 0.18, depthM: 0.25 };
   }
 }
 

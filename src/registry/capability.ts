@@ -122,6 +122,18 @@ export class DraftWorkspace {
     return this.patches.length === 0;
   }
 
+  /** Rebuild a draft from persisted patches and staged files (durable proposals survive restarts). */
+  static restore(base: MissionVersion, stagingDir: string, patches: PatchOp[], stagedAssets: StagedAsset[]): DraftWorkspace {
+    const draft = new DraftWorkspace(base, stagingDir);
+    for (const patch of patches) draft.propose(patch);
+    draft.stagedAssets.push(...stagedAssets);
+    return draft;
+  }
+
+  get directory(): string {
+    return this.stagingDir;
+  }
+
   /** Base configuration with all draft patches applied (not yet schema-validated). */
   workingConfig(): unknown {
     return structuredClone(this.working);

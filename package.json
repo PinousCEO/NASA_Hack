@@ -1,8 +1,8 @@
 {
-  "name": "mission-ai-core",
+  "name": "mission-platform",
   "version": "0.1.0",
   "private": true,
-  "description": "AI capability discovery, feasibility assessment and runtime development core for a shared MR/Web mission design workspace",
+  "description": "Collaborative WebXR space-mission design platform: AI runtime builder, MCP, scientific simulation, research knowledge base",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -10,8 +10,11 @@
   "scripts": {
     "dev": "tsx src/server/main.ts",
     "start": "tsx src/server/main.ts",
+    "dev:web": "npm --prefix apps/web run dev",
+    "build:web": "npm --prefix apps/web run build",
+    "install:web": "npm --prefix apps/web install",
     "mcp": "tsx src/mcp/stdio.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && npm --prefix apps/web run typecheck",
     "test": "vitest run"
   },
   "dependencies": {

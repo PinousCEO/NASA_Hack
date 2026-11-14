@@ -30,6 +30,8 @@ interface DerivedNode {
   description: string;
   configDeps: string[];
   derivedDeps: string[];
+  /** Evidence level of this node's output; defaults to a deterministic calculation. */
+  verification?: VerificationLevel;
   compute(config: MissionConfig, derived: Derived): { value: Record<string, unknown> | null; assumptions?: string[] };
 }
 
@@ -50,7 +52,7 @@ export function powerInputsFromComponents(components: Component[]): {
   const panels = components.filter((c) => c.type === "solar_panel");
   const batteries = components.filter((c) => c.type === "battery");
   const loads = components.flatMap((c) => {
-    if (c.type === "load") return [{ name: c.name, powerW: c.powerW, dutyCycle: c.dutyCycle }];
+    if (c.type === "load" || c.type === "instrument") return [{ name: c.name, powerW: c.powerW, dutyCycle: c.dutyCycle }];
     if (c.type === "antenna") return [{ name: c.name, powerW: c.dcPowerW, dutyCycle: c.dutyCycle }];
     return [];
   });
@@ -165,6 +167,7 @@ export const DERIVED_NODES: DerivedNode[] = [
           totalMassKg: total,
           massLimitKg: c.meta.massLimitKg ?? null,
           marginKg: c.meta.massLimitKg !== undefined ? c.meta.massLimitKg - total : null,
+          marginFraction: c.meta.massLimitKg !== undefined ? (c.meta.massLimitKg - total) / c.meta.massLimitKg : null,
         },
       };
     },
@@ -185,7 +188,7 @@ export const DERIVED_NODES: DerivedNode[] = [
         orbitPeriodS: el.periodS,
         yearsInService: c.meta.yearsInService,
       });
-      return { value: { ...result }, assumptions: ["Loads applied at their duty-cycle average", "No power conversion losses modelled"] };
+      return { value: { ...result, marginFraction: result.averageLoadW > 0 ? result.marginW / result.averageLoadW : null }, assumptions: ["Loads applied at their duty-cycle average", "No power conversion losses modelled"] };
     },
   },
   {
@@ -225,6 +228,90 @@ export const DERIVED_NODES: DerivedNode[] = [
       return {
         value: { rangeKm, links, worstMarginDb: links.length ? Math.min(...links.map((l) => l.marginDb)) : null },
         assumptions: [...assumptions, "Ground-station gain is taken at the antenna's frequency as configured"],
+      };
+    },
+  },
+  {
+    id: "data.budget",
+    description: "Science data generated per orbit against downlink capacity and onboard storage",
+    configDeps: ["spacecraft.components", "spacecraft.dataStorageGb"],
+    derivedDeps: ["orbit.elements", "comms.link"],
+    compute: (c, d) => {
+      const el = need<{ periodS: number }>(d, "orbit.elements");
+      const links = need<{ links: { antennaId: string; closes: boolean }[] }>(d, "comms.link").links;
+      const instruments = c.spacecraft.components.filter((x) => x.type === "instrument");
+      const antennas = c.spacecraft.components.filter((x) => x.type === "antenna");
+      const generatedBitsPerOrbit = instruments.reduce((s, i) => s + i.dataRateBps * i.dutyCycle * el.periodS, 0);
+      const downlinkBitsPerOrbit = antennas.reduce((s, a) => s + (links.find((l) => l.antennaId === a.id)?.closes ? a.dataRateBps * a.dutyCycle * el.periodS : 0), 0);
+      const orbitsPerDay = 86400 / el.periodS;
+      const backlogGbPerDay = (Math.max(0, generatedBitsPerOrbit - downlinkBitsPerOrbit) * orbitsPerDay) / 1e9;
+      return {
+        value: {
+          generatedGbPerDay: (generatedBitsPerOrbit * orbitsPerDay) / 1e9,
+          downlinkCapacityGbPerDay: (downlinkBitsPerOrbit * orbitsPerDay) / 1e9,
+          returnedGbPerDay: (Math.min(generatedBitsPerOrbit, downlinkBitsPerOrbit) * orbitsPerDay) / 1e9,
+          downlinkUtilisation: downlinkBitsPerOrbit > 0 ? generatedBitsPerOrbit / downlinkBitsPerOrbit : null,
+          backlogGbPerDay,
+          daysUntilStorageFull: backlogGbPerDay > 0 ? c.spacecraft.dataStorageGb / backlogGbPerDay : null,
+          downlinkSufficient: generatedBitsPerOrbit <= downlinkBitsPerOrbit,
+        },
+        assumptions: ["Antenna duty cycle is the fraction of each orbit spent downlinking; a link that does not close returns no data", "No compression, protocol overhead or ground-station scheduling"],
+      };
+    },
+  },
+  {
+    id: "science.return",
+    description: "Per-instrument observation geometry: coverage latitude, footprint and diffraction-limited resolution",
+    configDeps: ["spacecraft.components", "orbit.inclinationDeg", "orbit.semiMajorAxisKm", "orbit.eccentricity", "centralBody"],
+    derivedDeps: ["orbit.elements", "data.budget"],
+    compute: (c, d) => {
+      const el = need<{ periapsisAltitudeKm: number }>(d, "orbit.elements");
+      const data = need<{ generatedGbPerDay: number; returnedGbPerDay: number }>(d, "data.budget");
+      const share = data.generatedGbPerDay > 0 ? data.returnedGbPerDay / data.generatedGbPerDay : 0;
+      const instruments = c.spacecraft.components.filter((x) => x.type === "instrument").map((i) => {
+        const wavelengthM = (i.wavelengthUm ?? (i.kind === "thermal_imager" ? 10 : 0.55)) * 1e-6;
+        return {
+          instrumentId: i.id,
+          kind: i.kind,
+          returnedGbPerDay: ((i.dataRateBps * i.dutyCycle * 86400) / 1e9) * share,
+          // Rayleigh criterion at periapsis: 1.22 λ h / D
+          groundResolutionM: i.apertureM ? (1.22 * wavelengthM * el.periapsisAltitudeKm * 1000) / i.apertureM : null,
+          // Orbital neutron spectroscopy has a surface footprint of roughly 1.5x the altitude.
+          footprintKm: i.kind === "neutron_spectrometer" ? 1.5 * el.periapsisAltitudeKm : null,
+        };
+      });
+      const lat = Math.min(c.orbit.inclinationDeg, 180 - c.orbit.inclinationDeg);
+      return {
+        value: {
+          maxCoverageLatitudeDeg: lat,
+          reachesPoles: lat >= 85,
+          instrumentKinds: [...new Set(instruments.map((i) => i.kind))],
+          bestImagingResolutionM: instruments.reduce<number | null>((best, i) => (i.groundResolutionM !== null && (best === null || i.groundResolutionM < best) ? i.groundResolutionM : best), null),
+          neutronFootprintKm: instruments.reduce<number | null>((best, i) => (i.footprintKm !== null && (best === null || i.footprintKm < best) ? i.footprintKm : best), null),
+          totalReturnedGbPerDay: data.returnedGbPerDay,
+          instruments,
+        },
+        assumptions: ["Resolution is the diffraction limit at periapsis (no detector sampling, jitter or atmosphere)", "Neutron spectrometer footprint ≈ 1.5 × altitude (rule of thumb for uncollimated orbital instruments)", "Downlinked data is shared between instruments in proportion to what they generate"],
+      };
+    },
+  },
+  {
+    id: "cost.budget",
+    description: "Programme cost roll-up in the platform's game cost model",
+    configDeps: ["spacecraft", "rover", "meta.budgetMusd", "centralBody"],
+    derivedDeps: ["mass.budget"],
+    verification: "heuristic",
+    compute: (c, d) => {
+      const mass = need<{ totalMassKg: number }>(d, "mass.budget");
+      const componentCostMusd = [...c.spacecraft.components, ...(c.rover?.components ?? [])].reduce((s, x) => s + x.costMusd, 0);
+      // Delivery cost per kilogram by destination: a game parameter, order-of-magnitude only.
+      const perKg = { earth: 0.02, moon: 0.35, mars: 0.6 }[c.centralBody];
+      const roverMassKg = c.rover ? c.rover.chassisMassKg + c.rover.wheelCount * c.rover.wheelMassKg + c.rover.components.reduce((s, x) => s + x.massKg, 0) : 0;
+      const launchCostMusd = (mass.totalMassKg + roverMassKg) * perKg;
+      const total = componentCostMusd + c.spacecraft.busCostMusd + launchCostMusd;
+      return {
+        value: { componentCostMusd, busCostMusd: c.spacecraft.busCostMusd, launchCostMusd, totalCostMusd: total, budgetMusd: c.meta.budgetMusd ?? null, marginMusd: c.meta.budgetMusd !== undefined ? c.meta.budgetMusd - total : null, marginFraction: c.meta.budgetMusd !== undefined ? (c.meta.budgetMusd - total) / c.meta.budgetMusd : null },
+        assumptions: ["Game cost model: component prices are catalogue values and delivery is priced per kilogram by destination", "This is not a NASA cost estimate and excludes operations, reserves and development"],
       };
     },
   },
@@ -308,7 +395,7 @@ export function recalculate(config: MissionConfig, previous?: { config: MissionC
     dirty.add(node.id);
     try {
       const out = node.compute(config, derived);
-      derived[node.id] = { value: out.value, assumptions: out.assumptions ?? [], verification: "deterministic_calculation" };
+      derived[node.id] = { value: out.value, assumptions: out.assumptions ?? [], verification: node.verification ?? "deterministic_calculation" };
     } catch (err) {
       derived[node.id] = {
         value: null,
@@ -373,6 +460,14 @@ export function engineeringChecks(config: MissionConfig, derived: Derived): Cons
       comms.worstMarginDb < 0 ? "fail" : comms.worstMarginDb < 3 ? "warn" : "pass",
       `worst link margin ${comms.worstMarginDb.toFixed(2)} dB`,
     );
+  }
+  const cost = derived["cost.budget"]?.value as { marginMusd: number | null; totalCostMusd: number } | null | undefined;
+  if (cost && cost.marginMusd !== null) {
+    add("cost.limit", "Programme cost within the budget cap (game cost model)", cost.marginMusd >= 0 ? "pass" : "fail", `total $${cost.totalCostMusd.toFixed(1)}M, margin $${cost.marginMusd.toFixed(1)}M`);
+  }
+  const data = derived["data.budget"]?.value as { downlinkSufficient: boolean; generatedGbPerDay: number; downlinkCapacityGbPerDay: number } | null | undefined;
+  if (data && data.generatedGbPerDay > 0) {
+    add("data.downlink", "Downlink capacity covers the science data generated", data.downlinkSufficient ? "pass" : "warn", `generated ${data.generatedGbPerDay.toFixed(2)} Gb/day, downlink capacity ${data.downlinkCapacityGbPerDay.toFixed(2)} Gb/day`);
   }
   const rover = derived["rover.performance"]?.value as { canTraverseSite: boolean; slopeMarginDeg: number; limitingFactor: string } | null | undefined;
   if (rover) {

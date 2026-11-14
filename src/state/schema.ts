@@ -7,6 +7,8 @@ import { z } from "zod";
 const id = z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/, "id must be alphanumeric (with _ or -), starting with a letter");
 const fraction = z.number().min(0).max(1);
 const bodyId = z.enum(["earth", "moon", "mars"]);
+/** Cost in the platform's game cost model, millions of US dollars. Not a NASA cost estimate. */
+const costMusd = z.number().min(0).default(0);
 
 export const SolarPanelSchema = z.object({
   id,
@@ -17,6 +19,7 @@ export const SolarPanelSchema = z.object({
   efficiency: fraction,
   pointingLoss: fraction.default(0.1),
   degradationPerYear: fraction.default(0.02),
+  costMusd,
 });
 
 export const BatterySchema = z.object({
@@ -26,6 +29,7 @@ export const BatterySchema = z.object({
   massKg: z.number().min(0),
   capacityWh: z.number().positive(),
   maxDepthOfDischarge: fraction.default(0.4),
+  costMusd,
 });
 
 export const AntennaSchema = z.object({
@@ -44,6 +48,7 @@ export const AntennaSchema = z.object({
   dataRateBps: z.number().positive(),
   otherLossesDb: z.number().min(0).default(3),
   requiredEbN0Db: z.number().default(9.6),
+  costMusd,
 });
 
 export const LoadSchema = z.object({
@@ -53,9 +58,29 @@ export const LoadSchema = z.object({
   massKg: z.number().min(0),
   powerW: z.number().min(0),
   dutyCycle: fraction.default(1),
+  costMusd,
 });
 
-export const ComponentSchema = z.discriminatedUnion("type", [SolarPanelSchema, BatterySchema, AntennaSchema, LoadSchema]);
+export const INSTRUMENT_KINDS = ["camera", "spectrometer", "neutron_spectrometer", "radar", "magnetometer", "thermal_imager", "lidar"] as const;
+
+/** A science instrument: draws power, produces data, and is what mission objectives are scored on. */
+export const InstrumentSchema = z.object({
+  id,
+  type: z.literal("instrument"),
+  name: z.string(),
+  kind: z.enum(INSTRUMENT_KINDS),
+  massKg: z.number().min(0),
+  powerW: z.number().min(0),
+  dutyCycle: fraction.default(0.5),
+  /** Data produced while operating, bit/s. */
+  dataRateBps: z.number().min(0),
+  /** Optical aperture, for imaging instruments (drives diffraction-limited resolution). */
+  apertureM: z.number().positive().optional(),
+  wavelengthUm: z.number().positive().optional(),
+  costMusd,
+});
+
+export const ComponentSchema = z.discriminatedUnion("type", [SolarPanelSchema, BatterySchema, AntennaSchema, LoadSchema, InstrumentSchema]);
 export type Component = z.infer<typeof ComponentSchema>;
 
 const uniqueIds = (items: { id: string }[]): boolean => new Set(items.map((i) => i.id)).size === items.length;
@@ -122,6 +147,9 @@ export const MissionConfigSchema = z.object({
     description: z.string().default(""),
     /** Optional launch mass allocation used as an engineering constraint. */
     massLimitKg: z.number().positive().optional(),
+    /** Programme budget cap in the game cost model, $M. */
+    budgetMusd: z.number().positive().optional(),
+    missionDurationDays: z.number().positive().max(3650).default(365),
     yearsInService: z.number().min(0).default(0),
   }),
   missionTime: z.iso.datetime({ offset: true }),
@@ -138,6 +166,9 @@ export const MissionConfigSchema = z.object({
   spacecraft: z.object({
     name: z.string(),
     busDryMassKg: z.number().positive(),
+    busCostMusd: costMusd,
+    /** Onboard science data storage, gigabits. */
+    dataStorageGb: z.number().min(0).default(64),
     components: z.array(ComponentSchema).refine(uniqueIds, "component ids must be unique"),
   }),
   groundStation: z.object({

@@ -5,7 +5,7 @@
  * came out, which tests ran, and why the change was approved or rejected.
  */
 import { EventEmitter } from "node:events";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { newId, nowIso, type User } from "../core/types.js";
 import type { LlmService } from "../llm/llm.js";
@@ -18,7 +18,7 @@ import { assessFeasibility } from "./feasibility.js";
 import { Planner } from "./planner.js";
 import type { ProposalService } from "./proposals.js";
 import { RequirementAnalyzer } from "./requirements.js";
-import type { Proposal, RequestRecord, RequestStatus, TraceEvent } from "./types.js";
+import type { Operation, Proposal, RequestRecord, RequestStatus, StructuredRequirement, TraceEvent } from "./types.js";
 
 export interface RequestEvents {
   /** Fired whenever a request changes (status, plan progress, new trace events). */
@@ -42,6 +42,7 @@ const TERMINAL: RequestStatus[] = ["completed", "infeasible", "awaiting_clarific
 export class RequestService extends EventEmitter<RequestEvents> {
   private readonly requests = new Map<string, RequestRecord>();
   private readonly running = new Map<string, { controller: AbortController; done: Promise<void> }>();
+  private readonly structured = new Map<string, Operation[]>();
   private readonly analyzer: RequirementAnalyzer;
   private readonly planner: Planner;
   private readonly executor: PlanExecutor;
@@ -51,6 +52,20 @@ export class RequestService extends EventEmitter<RequestEvents> {
     this.analyzer = new RequirementAnalyzer(deps.llm);
     this.planner = new Planner(deps.registry, deps.llm);
     this.executor = new PlanExecutor(deps.registry);
+    if (deps.dataDir) {
+      const dir = path.join(deps.dataDir, "requests");
+      if (existsSync(dir)) {
+        for (const file of readdirSync(dir).filter((f) => f.endsWith(".json"))) {
+          const record = JSON.parse(readFileSync(path.join(dir, file), "utf8")) as RequestRecord;
+          if (!TERMINAL.includes(record.status)) {
+            // The process stopped while this request was in flight; its draft was never published.
+            record.status = "failed";
+            record.error = "Interrupted by a server restart before completion";
+          }
+          this.requests.set(record.id, record);
+        }
+      }
+    }
   }
 
   get(id: string): RequestRecord | undefined {
@@ -77,6 +92,31 @@ export class RequestService extends EventEmitter<RequestEvents> {
       planIssues: [],
       trace: [],
     };
+    this.requests.set(record.id, record);
+    this.start(record);
+    return record;
+  }
+
+  /**
+   * Start a request from operations that are already structured (a catalogue pick, an XR
+   * tool, an API client). Natural-language analysis is skipped; everything after it —
+   * planning, feasibility, execution, preview, approval — is identical.
+   */
+  submitOperations(args: { summary: string; operations: Omit<Operation, "id">[]; user: User; trainingConsent?: boolean }): RequestRecord {
+    if (args.operations.length === 0) throw new Error("At least one operation is required");
+    const record: RequestRecord = {
+      id: newId("rq"),
+      text: args.summary,
+      user: args.user,
+      trainingConsent: args.trainingConsent ?? false,
+      status: "analyzing",
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      similarPastWork: [],
+      planIssues: [],
+      trace: [],
+    };
+    this.structured.set(record.id, args.operations.map((op, i) => ({ ...op, id: `op${i + 1}` })));
     this.requests.set(record.id, record);
     this.start(record);
     return record;
@@ -205,7 +245,10 @@ export class RequestService extends EventEmitter<RequestEvents> {
     });
 
     // 2. Natural language → structured requirement.
-    const requirement = await this.analyzer.analyze(record.text, mission, signal);
+    const preset = this.structured.get(record.id);
+    const requirement: StructuredRequirement = preset
+      ? { id: newId("req"), originalText: record.text, summary: record.text, operations: preset, missingInformation: [], analysis: { method: "rule_based", verification: "deterministic_calculation" }, missionVersionInspected: mission.version }
+      : await this.analyzer.analyze(record.text, mission, signal);
     record.requirement = requirement;
     this.trace(record, "analysis", `Requirement analysed (${requirement.analysis.method}): ${requirement.summary}`, {
       method: requirement.analysis.method,

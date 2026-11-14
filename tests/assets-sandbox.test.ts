@@ -58,7 +58,7 @@ describe("GLB assets", () => {
   });
 
   it("sizes placeholder assets from component parameters", () => {
-    const spec = assetSpecForComponent({ id: "sp9", type: "solar_panel", name: "p", massKg: 1, areaM2: 2, efficiency: 0.3, pointingLoss: 0, degradationPerYear: 0 });
+    const spec = assetSpecForComponent({ id: "sp9", type: "solar_panel", name: "p", massKg: 1, areaM2: 2, efficiency: 0.3, pointingLoss: 0, degradationPerYear: 0, costMusd: 0 });
     expect(spec.kind).toBe("solar_panel");
     if (spec.kind === "solar_panel") expect(spec.widthM * spec.heightM).toBeCloseTo(2, 9);
   });

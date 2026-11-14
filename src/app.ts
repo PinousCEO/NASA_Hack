@@ -1,4 +1,8 @@
-/** Composition root: builds the registry, state store, memory and pipeline services. */
+/**
+ * Single-mission composition root: registry, one mission store, memory and the request
+ * pipeline. Used by the stdio MCP server and the pipeline tests; the multi-session
+ * platform (accounts, sessions, collaboration, game) is assembled in platform/platform.ts.
+ */
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +11,8 @@ import { assetCapabilities } from "./capabilities/assets.js";
 import { codeCapabilities } from "./capabilities/code.js";
 import { dataCapabilities } from "./capabilities/data.js";
 import { missionCapabilities } from "./capabilities/mission.js";
+import { nasaCapabilities } from "./capabilities/nasa.js";
+import { KnowledgeBase } from "./knowledge/knowledge.js";
 import { scienceCapabilities } from "./capabilities/science.js";
 import { AnthropicLlm, type LlmService } from "./llm/llm.js";
 import { McpBridge } from "./mcp/bridge.js";
@@ -56,6 +62,7 @@ export function createApp(options: AppOptions = {}): App {
     ...assetCapabilities(),
     ...codeCapabilities({ llm }),
     ...dataCapabilities(),
+    ...nasaCapabilities({ knowledge: new KnowledgeBase(memory, null) }),
   ]) {
     registry.register(capability);
   }

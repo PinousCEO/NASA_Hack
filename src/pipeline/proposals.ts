@@ -7,12 +7,12 @@
  * mission version, and is broadcast (configuration + derived results) by the store.
  */
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { validateGlb } from "../assets/glb.js";
 import { diff, type DiffEntry } from "../core/paths.js";
 import { newId, nowIso, type Role, type User, type VerificationLevel, weakestVerification } from "../core/types.js";
-import type { DraftWorkspace } from "../registry/capability.js";
+import { DraftWorkspace } from "../registry/capability.js";
 import { runInSandbox } from "../sandbox/sandbox.js";
 import { validateModuleSource } from "../sandbox/typecheck.js";
 import { type Derived, engineeringChecks, recalculate, type RecalcResult } from "../state/recalc.js";
@@ -90,10 +90,40 @@ interface Entry {
 export class ProposalService {
   private readonly entries = new Map<string, Entry>();
 
+  /**
+   * @param dir directory in which pending and decided proposals are persisted, or null to
+   *            keep them in memory only. Persisted proposals are restored on construction.
+   */
   constructor(
     private readonly store: MissionStore,
     private readonly assetsDir: string,
-  ) {}
+    private readonly dir: string | null = null,
+  ) {
+    if (!dir || !existsSync(dir)) return;
+    for (const file of readdirSync(dir).filter((f) => f.endsWith(".json"))) {
+      const saved = JSON.parse(readFileSync(path.join(dir, file), "utf8")) as { proposal: Proposal; sourceEvidence: VerificationLevel; draft: { stagingDir: string; stagedAssets: { id: string; stagedPath: string; fileName: string }[] } };
+      const base = store.get(saved.proposal.baseVersion) ?? store.head();
+      let draft: DraftWorkspace;
+      try {
+        // Pending proposals get their draft back; decided ones only need the record.
+        draft = saved.proposal.status === "awaiting_approval" ? DraftWorkspace.restore(base, saved.draft.stagingDir, saved.proposal.patches, saved.draft.stagedAssets) : new DraftWorkspace(base, saved.draft.stagingDir);
+      } catch {
+        saved.proposal.status = "superseded";
+        draft = new DraftWorkspace(base, saved.draft.stagingDir);
+      }
+      // The candidate configuration is recomputed against the current head when it is next needed.
+      this.entries.set(saved.proposal.id, { proposal: saved.proposal, draft, sourceEvidence: saved.sourceEvidence, candidate: null });
+    }
+  }
+
+  private persist(entry: Entry): void {
+    if (!this.dir) return;
+    mkdirSync(this.dir, { recursive: true });
+    writeFileSync(
+      path.join(this.dir, `${entry.proposal.id}.json`),
+      JSON.stringify({ proposal: entry.proposal, sourceEvidence: entry.sourceEvidence, draft: { stagingDir: entry.draft.directory, stagedAssets: entry.draft.stagedAssets } }, null, 2),
+    );
+  }
 
   get(id: string): Proposal | undefined {
     return this.entries.get(id)?.proposal;
@@ -217,7 +247,9 @@ export class ProposalService {
       status: "awaiting_approval",
       ...fields,
     };
-    this.entries.set(proposal.id, { proposal, draft: args.draft, sourceEvidence, candidate });
+    const entry: Entry = { proposal, draft: args.draft, sourceEvidence, candidate };
+    this.entries.set(proposal.id, entry);
+    this.persist(entry);
     return proposal;
   }
 
@@ -231,8 +263,9 @@ export class ProposalService {
       throw new Error(`A ${proposal.significance} change requires approval by role "${proposal.requiredRole}"; "${approver.id}" is "${approver.role}"`);
     }
     const head = this.store.head();
-    if (head.version !== proposal.baseVersion) {
-      // The mission moved on since the preview: re-evaluate against the new head before deciding.
+    if (head.version !== proposal.baseVersion || entry.candidate === null) {
+      // The mission moved on since the preview (or the proposal was restored after a restart):
+      // re-evaluate against the current head before deciding.
       const { candidate, ...fields } = await this.evaluate(draft, head, entry.sourceEvidence);
       Object.assign(proposal, fields);
       entry.candidate = candidate;
@@ -251,6 +284,7 @@ export class ProposalService {
     proposal.publishedVersion = version.version;
     proposal.decision = { by: approver, at: nowIso(), action: "approved", reason };
     draft.discard();
+    this.persist(entry);
     return { proposal, version };
   }
 
@@ -262,6 +296,7 @@ export class ProposalService {
     entry.proposal.status = "rejected";
     entry.proposal.decision = { by, at: nowIso(), action: "rejected", reason };
     entry.draft.discard();
+    this.persist(entry);
     return entry.proposal;
   }
 }

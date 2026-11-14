@@ -1,39 +1,52 @@
 /** Server entry point: `npm run dev`. */
 import path from "node:path";
-import { createApp, PROJECT_ROOT } from "../app.js";
+import { PROJECT_ROOT } from "../app.js";
 import { McpBridge } from "../mcp/bridge.js";
-import { createHttpServer } from "./http.js";
+import { createPlatform } from "../platform/platform.js";
+import { loadEnvFile } from "../platform/secrets.js";
+import { createPlatformServer, tlsFromEnv } from "./http.js";
+
+loadEnvFile(PROJECT_ROOT);
 
 const port = Number(process.env.PORT ?? 8787);
-// Loopback by default: the API trusts the caller's stated identity (see http.ts).
+// Loopback by default. Headsets on the LAN need HOST=0.0.0.0 and TLS (WebXR requires a secure context).
 const host = process.env.HOST ?? "127.0.0.1";
 const dataDir = process.env.MISSION_DATA_DIR ?? path.join(PROJECT_ROOT, ".data");
+const tls = tlsFromEnv();
 
-const app = createApp({ dataDir });
+const platform = createPlatform({ dataDir });
 
 const servers = McpBridge.loadConfig(process.env.MISSION_MCP_CONFIG ?? path.join(PROJECT_ROOT, "config", "mcp-servers.json"));
-for (const status of await app.mcp.connectAll(servers)) {
+for (const status of await platform.mcp.connectAll(servers)) {
   console.log(status.connected ? `MCP server "${status.name}": ${status.tools} tool(s) registered` : `MCP server "${status.name}" unavailable: ${status.error}`);
 }
-await app.registry.refreshAvailability();
+await platform.registry.refreshAvailability();
 
-const usable = app.registry.list().filter((d) => app.registry.isUsable(d));
-console.log(`Capabilities: ${usable.length} usable of ${app.registry.list().length} registered`);
-for (const d of app.registry.list().filter((c) => !app.registry.isUsable(c))) {
+const ingest = platform.knowledge.ingestDirectory(platform.documentsDir);
+console.log(`Knowledge base: ${ingest.documents} document(s), ${ingest.passages} passage(s)${ingest.skipped.length ? `; skipped ${ingest.skipped.map((s) => `${s.file} (${s.reason})`).join("; ")}` : ""}`);
+
+const all = platform.registry.list();
+console.log(`Capabilities: ${all.filter((d) => platform.registry.isUsable(d)).length} usable of ${all.length} registered`);
+for (const d of all.filter((c) => !platform.registry.isUsable(c))) {
   console.log(`  - ${d.id}: ${d.developmentStatus === "planned" ? "planned" : "unavailable"} (${d.availability.reason ?? "no reason"})`);
 }
-const llm = app.llm.status();
-console.log(llm.available ? `Language model: ${app.llm.modelId}` : `Language model unavailable — using the rule-based analyser. ${llm.reason}`);
+const llm = platform.llm.status();
+console.log(llm.available ? `Language model: ${platform.llm.modelId}` : `Language model unavailable — using the rule-based analyser. ${llm.reason}`);
+const chain = platform.audit.verify();
+console.log(chain.ok ? `Audit log: ${chain.entries} entr${chain.entries === 1 ? "y" : "ies"}, chain intact` : `AUDIT LOG CHAIN BROKEN at entry ${chain.brokenAt}`);
+if (platform.auth.accountCount === 0) console.log("No accounts yet: the first account registered becomes the administrator.");
 
-const server = createHttpServer(app);
+const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+const server = createPlatformServer(platform, { allowedOrigins, ...(tls ? { tls } : {}) });
 server.listen(port, host, () => {
-  console.log(`Mission "${app.store.head().config.meta.name}" at version ${app.store.head().version}`);
-  console.log(`Workspace: http://${host}:${port}/   API: /api   WebSocket: /ws   MCP: /mcp`);
+  const scheme = tls ? "https" : "http";
+  console.log(`Mission platform: ${scheme}://${host}:${port}/   API: /api   WebSocket: /ws   MCP: /mcp?session=<id>`);
+  if (!tls && host !== "127.0.0.1" && host !== "localhost") console.log("Warning: serving plain HTTP on a non-loopback address. WebXR and secure cookies need TLS (TLS_CERT_FILE / TLS_KEY_FILE).");
 });
 
 const shutdown = (): void => {
   server.close();
-  void app.close().finally(() => process.exit(0));
+  void platform.close().finally(() => process.exit(0));
 };
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);

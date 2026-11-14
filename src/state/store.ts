@@ -16,6 +16,8 @@ export interface MissionVersion {
   config: MissionConfig;
   derived: Derived;
   recalculated: string[];
+  /** Config paths this version changed relative to its parent. */
+  changedPaths?: string[];
   publishedAt: string;
   publishedBy: string;
   note: string;
@@ -75,6 +77,7 @@ export class MissionStore extends EventEmitter<MissionStoreEvents> {
       config: parsed.config,
       derived: recalc.derived,
       recalculated: recalc.recalculated,
+      changedPaths: recalc.changedPaths,
       publishedAt: nowIso(),
       publishedBy: meta.by,
       note: meta.note,

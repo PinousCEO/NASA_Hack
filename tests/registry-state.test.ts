@@ -56,6 +56,7 @@ describe("capability registry", () => {
     app = createApp();
     const planned = app.registry.list().filter((d) => d.developmentStatus === "planned");
     expect(planned.map((d) => d.id).sort()).toEqual(["asset.text_to_3d", "data.terrain.dem"]);
+    expect(app.registry.get("gmat.run")!.descriptor.developmentStatus).toBe("experimental");
     for (const d of planned) {
       expect(app.registry.isUsable(d)).toBe(false);
       expect(d.availability.reason).toMatch(/Planned/);
@@ -122,7 +123,7 @@ describe("dependency-aware recalculation", () => {
   it("recalculates only what a ground-station change affects", () => {
     app = createApp();
     const { head, next } = change("groundStation.antennaGainDbi", 60);
-    expect(next.recalculated).toEqual(["comms.link"]);
+    expect(next.recalculated).toEqual(["comms.link", "data.budget", "science.return"]);
     expect(next.derived["power.budget"]).toBe(head.derived["power.budget"]); // reused, not recomputed
     const before = (head.derived["comms.link"]!.value as { worstMarginDb: number }).worstMarginDb;
     expect((next.derived["comms.link"]!.value as { worstMarginDb: number }).worstMarginDb).toBeCloseTo(before - 8.2, 6);
@@ -147,11 +148,11 @@ describe("dependency-aware recalculation", () => {
   it("limits a spacecraft component change to the nodes that read components, and a rover change to rover performance", () => {
     app = createApp();
     const panel = change("spacecraft.components.sp1.areaM2", 2.4);
-    expect(panel.next.recalculated.sort()).toEqual(["comms.link", "mass.budget", "power.budget"]);
+    expect(panel.next.recalculated.sort()).toEqual(["comms.link", "cost.budget", "data.budget", "mass.budget", "power.budget", "science.return"]);
     const gen = (d: typeof panel.head.derived): number => (d["power.budget"]!.value as { sunlitGenerationW: number }).sunlitGenerationW;
     expect(gen(panel.next.derived)).toBeCloseTo(2 * gen(panel.head.derived), 6);
     const rover = change("rover.wheelTorqueNm", 0.2);
-    expect(rover.next.recalculated).toEqual(["rover.performance"]);
+    expect(rover.next.recalculated.sort()).toEqual(["cost.budget", "rover.performance"]);
     expect(engineeringChecks(parseMissionConfigOrThrow(applyPatch(app.store.head().config as unknown, { op: "set", path: "rover.wheelTorqueNm", value: 0.2 })), rover.next.derived).find((c) => c.id === "rover.slope")!.status).toBe("fail");
   });
 });
