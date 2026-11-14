@@ -1,141 +1,104 @@
-# Mission AI Core
+# Mission Forge
 
-The AI engineering core for a shared MR/Web mission-design workspace. It takes a
-natural-language request, works out what is being asked, discovers which capabilities
-can do it, assesses feasibility, plans and executes a dependency graph of tasks, and
-puts any change to the mission through preview, automated tests and human approval
-before publishing a new mission version to every connected client.
+2026 NASA Space Apps Challenge — **Space Mission Design Game (Challenge 13)** 용 협업 우주 미션 설계 플랫폼.
 
-## Run it
+여러 명이 같은 미션을 Web과 WebXR(Meta Quest 브라우저)에서 동시에 설계하고, 자연어로 기능을 요청하면 AI가 계획·생성·검증·배포하며, 모든 변경은 실제 공학 모델로 재계산되어 전원에게 동기화됩니다.
+
+> NASA와 무관한 독립 프로젝트입니다. 공학 모델은 가정이 명시된 1차 근사이고, 비용은 게임용 비용 모델입니다.
+
+## 실행
 
 ```bash
-npm install
-npm run dev        # http://127.0.0.1:8787  (web workspace, REST API, WebSocket, MCP)
-npm test           # 80+ tests, including live JPL Horizons and MCP round-trips
-npm run typecheck
-npm run mcp        # "mission-core" MCP server over stdio (read-only tools)
+npm install && npm run install:web   # 서버 + 웹 클라이언트 의존성
+npm run build:web                    # Next.js 정적 빌드 (apps/web/out)
+npm run dev                          # http://127.0.0.1:8787
 ```
 
-Requires Node 22+. State is stored under `.data/` (delete it to start again from
-`config/seed-mission.json`).
+Node 22 이상. 첫 번째로 가입한 계정이 플랫폼 관리자가 됩니다. 상태는 `.data/`에 저장됩니다.
 
-**Language model.** Set `ANTHROPIC_API_KEY` to enable model-based request analysis,
-multi-tool planning and TypeScript generation (`claude-opus-5-5` by default; override with
-`MISSION_AI_MODEL`). Requests use the API's server-side refusal fallback. Without
-credentials the system still runs: a rule-based analyser handles common requests, and
-anything that needs a model is reported as *requires additional resources* rather than
-approximated.
+| 명령 | 내용 |
+|---|---|
+| `npm test` | 단위·통합 테스트 96개 (JPL Horizons 실연동, MCP 왕복, 4인 협업 포함) |
+| `npm run e2e` | 실제 브라우저(Edge/Chrome) E2E 26개 — XR 에뮬레이션 포함. 먼저 `build:web` 필요 |
+| `npm run typecheck` | 서버 + 웹 타입 검사 |
+| `npm run dev:web` | 프런트엔드 개발 서버(3000). `ALLOWED_ORIGINS=http://localhost:3000`, `NEXT_PUBLIC_CORE_ORIGIN=http://127.0.0.1:8787` 설정 |
+| `npm run mcp` | stdio MCP 서버 (읽기 전용 도구) |
 
-**Network exposure.** The server binds to loopback by default (`HOST`, `PORT` to change).
-The API trusts the caller's stated `user: { id, role }`; it does not authenticate. Put it
-behind the workspace's real authentication before exposing it to a LAN or headsets.
+### 환경 변수 (`.env.example` 참고, 비밀값은 환경에서만 읽음)
 
-## How a request flows
+- `ANTHROPIC_API_KEY` — 모델 기반 요청 분석·다중 도구 계획·코드 생성. 없으면 규칙 기반 분석기로 동작하고, 모델이 필요한 요청은 "추가 자원 필요"로 분류됩니다.
+- `GMAT_BIN` — GMAT 콘솔 실행 파일 경로(`gmat.run` 활성화).
+- `HOST`, `PORT`, `TLS_CERT_FILE`, `TLS_KEY_FILE` — LAN/HTTPS 제공.
+
+### Meta Quest에서 열기
+
+WebXR은 보안 컨텍스트가 필요합니다. 둘 중 하나를 사용하세요.
+
+1. USB 연결 후 `adb reverse tcp:8787 tcp:8787` → 헤드셋 브라우저에서 `http://localhost:8787`
+2. `HOST=0.0.0.0` + `TLS_CERT_FILE`/`TLS_KEY_FILE` 지정 → `https://<PC IP>:8787`
+
+헤드셋이 없으면 미션 URL에 `&iwer=1`을 붙여 소프트웨어 Quest 3(IWER)로 XR 경로를 실행할 수 있습니다.
+
+## 구성
 
 ```
-text ─► inspect state ─► requirement analysis ─► memory lookup ─► planning ─► feasibility
-                                                                                  │ proceed?
-        publish + broadcast ◄─ approval ◄─ preview + tests ◄─ execution (draft workspace)
+apps/web/            Next.js 16 + React 19 + Three.js + IWSDK (정적 export, 서버가 같은 오리진으로 제공)
+  app/               랜딩 · 인증 · 로비 · 미션 작업공간 · 리더보드 · 연구 기록
+  lib/scene/         미션 3D 장면 (절차적 행성, 궤도·일식 구간, 시스템 연결 흐름, 참가자 아바타)
+  lib/xr/            IWSDK World, XR 능력 감지, 그랩, 공간 슬라이더·패널·키보드
+  lib/collab.ts      실시간 협업 클라이언트 (재접속·충돌 처리)
+src/
+  platform/          인증, 감사 로그, 시크릿, 세션 관리자(멤버·권한·편집·게임)
+  server/            HTTP API, WebSocket 협업 허브
+  pipeline/          요구사항 분석 → 계획 → 실현 가능성 → 실행 → 미리보기/승인 (기존 AI 코어)
+  registry/ capabilities/ sandbox/ mcp/   Capability Registry, 28개 capability, QuickJS, MCP
+  science/ nasa/     궤도·전력·통신·로버 모델, J2 전파기, GMAT 인터페이스, 수명주기/CML
+  game/              시나리오, 미션 생성, 일 단위 시뮬레이션, 채점
+  knowledge/ memory/ 지식 베이스(BM25, RAG 컨텍스트), 연구 기록
+tests/               vitest 6개 파일 + tests/e2e (Playwright)
 ```
 
-| Stage | Module | What it does |
-|---|---|---|
-| Capability registry | `src/registry/` | Structured metadata for every capability (schemas, dependencies, permissions, resources, constraints, availability, version, verification status). Discovery by text, tag, category, permission; health checks; execution statistics; alternatives for failure recovery. |
-| Requirement analysis | `src/pipeline/requirements.ts` | Text → operations in ten categories. Asks for clarification only when a required value has no safe default; records every value it assumed. |
-| Planning | `src/pipeline/planner.ts` | Operations → task graph. Recipes name the *kind* of capability needed (a `provides` tag) and the registry resolves it; free-form requests are planned by the model from the live catalogue, and its plan is validated. |
-| Feasibility | `src/pipeline/feasibility.ts` | Classifies the request (feasible / with modifications / requires additional resources / requires further research / currently unsupported / scientifically unverified) and states the basis of every finding. Engineering findings come from a dry run of the deterministic models. |
-| Execution | `src/pipeline/executor.ts` | Parallel where dependencies allow, timeouts, retries with backoff, result validation, fallback to alternative capabilities, cancellation, rollback. |
-| Runtime builder | `src/capabilities/`, `src/assets/`, `src/sandbox/` | Parametric GLB generation, glTF→GLB conversion, component and scene changes, model-generated TypeScript validated by a policy scan, a strict type-check against the controlled API, and a run in a QuickJS/WebAssembly sandbox. |
-| Preview, approval, deployment | `src/pipeline/proposals.ts`, `src/state/store.ts` | Diff, affected components, recalculated consequences, automated tests, role-gated approval, immutable versions, rollback. |
-| Recalculation | `src/state/recalc.ts` | Derived results form a dependency graph; a change recomputes only what is downstream of it. Broadcasts carry the configuration *and* the recalculated results. |
-| Research memory | `src/memory/memory.ts` | Append-only records with provenance, model ids, assumptions and verification level; lexical similarity search; training eligibility requires consent, quality review and validated evidence. |
-| Observability | request `trace` | Per request: tools selected and why, inputs, outputs, tests, and the approval or rejection with its reason. |
+## 무엇이 구현되어 있는가
 
-### Evidence levels
+**WebXR 작업공간** — 하나의 IWSDK World가 데스크톱과 헤드셋을 모두 렌더링합니다. `immersive-ar`(패스스루 MR) 우선, 없으면 `immersive-vr`, 둘 다 없으면 데스크톱 모드와 그 이유를 표시합니다. 손 추적은 선택 기능으로 요청합니다. XR에서는 가슴 높이의 "미션 테이블"에 궤도/시스템 뷰가 놓이고, 공간 슬라이더(고도·경사각·미션일)와 부품을 잡아 옮길 수 있으며, 상태 패널·명령 패널·공간 키보드가 제공됩니다.
 
-Every result carries one of: `independently_verified`, `deterministic_calculation`,
-`external_data`, `heuristic`, `model_judgment`, `unverified`. Nothing is promoted
-implicitly. Model output stays `model_judgment`; a proposal built on it is flagged, and
-the automated tests say what they do and do not establish.
+**실시간 멀티플레이** — 세션당 최대 8명. 클라이언트는 *의도*(편집, 잠금, 프레즌스)만 보내고 서버가 권위 상태(설정 + 재계산 결과 + 제약 + 점수)를 버전 단위로 방송합니다. 같은 필드를 동시에 고치면 뒤늦은 쪽이 현재 값과 함께 거절되고, 다른 필드는 자동 병합됩니다. 잡고 있는 객체는 잠기며, 연결이 끊기면 잠금이 풀립니다. 재접속 시 놓친 버전 목록을 받습니다.
 
-### Safety model
+**자연어 런타임 빌더** — 상태 검사 → 분석 → capability 탐색 → 실현 가능성 → 계획 → 에셋/컴포넌트/스크립트 생성 → 격리 테스트 → 미리보기 → 승인 → 배포 → 동기화. 생성 코드는 QuickJS(WASM) 샌드박스에서만 실행됩니다. GLB 에셋은 콘텐츠 해시 주소라 버전별로 불변입니다. 모델이 만든 코드는 정책과 무관하게 리드 승인이 필요합니다.
 
-Capabilities cannot modify the shared mission. They write to a per-request **draft
-workspace**; a failed or cancelled plan discards it. Scripts and assets can only be added
-through their validating capabilities. Generated code never runs in the host process:
-it executes in QuickJS compiled to WebAssembly with time and memory limits, no Node, no
-network, and a five-function API through which it can read state, run calculations and
-*propose* changes. (QuickJS was chosen over Lua because generated modules are TypeScript.)
+**NASA 연동**
 
-## Capabilities
+| 항목 | 상태 |
+|---|---|
+| JPL Horizons 상태 벡터 | 실연동 (테스트에서 실시간 호출) |
+| 궤도·일식·전력·링크·로버 | 결정적 계산, 문헌 기준값으로 검증 |
+| J2 수치 전파 | 근사 (해석적 세차율과 3% 이내 일치). 고차 중력·제3체·항력 없음 |
+| GMAT 스크립트 생성 / 리포트 가져오기 | 구현. 스크립트는 GMAT으로 실행해 검증하지 못함(미설치) |
+| GMAT 실행 (`gmat.run`) | `GMAT_BIN` 없으면 사용 불가로 표시 |
+| Mission Viz 워크플로 | GMAT 리포트 → 궤적 JSON 가져오기로 구현 |
+| SE 수명주기, CML 1–9, 임무 세그먼트, MDL 분과 | 참조 데이터 + CML 1–5 규칙 기반 평가 (교육용, 공식 리뷰 아님) |
+| CubeSat 개념 | 6U 시나리오(12 kg 제한, 디스펜서 제약) |
+| 지형 DEM, 생성형 text-to-3D | 미구현 — 레지스트리에 "planned"로 표시 |
 
-21 are registered; `GET /api/capabilities` is the source of truth.
+**게임** — 시나리오 3개(달 남극 휘발성 물질 탐사 / 6U CubeSat / 화성 기상·중계), 시드 기반 미션 생성(예산·질량·발사일·프로그램 변수), 분과 좌석, 부품 카탈로그, 트레이드 스터디, 1일 단위 미션 시뮬레이션, CML 기반 단계 게이트, 결정적 채점과 피드백, 제출, 리더보드.
 
-- **Mission state** — `mission.inspect`, `mission.propose_patch`, `mission.add_component`, `mission.attach_script`, `script.run`, `memory.search`
-- **Scientific calculation** — `science.orbit.elements`, `science.orbit.hohmann`, `science.ephemeris.sun`, `science.power.budget`, `science.comms.link_budget`, `science.rover.mobility`, `science.terrain.slope_analysis`
-- **Simulation** — `simulation.power_timeline`
-- **Assets** — `asset.generate_parametric`, `asset.gltf_to_glb`
-- **Code** — `code.generate_module` (needs a model), `code.validate_module`
-- **External data** — `data.horizons.vectors` (NASA/JPL Horizons, live)
-- **Planned, not implemented** — `asset.text_to_3d`, `data.terrain.dem`. They are listed so the gap is visible; they cannot be selected or executed.
+**연구 지식 플랫폼** — 미션 문제, 가설, 사용자 기여, 설계 변경, AI 평가, 도구 실행, 시뮬레이션, 결과가 출처·가정·검증 수준과 함께 기록됩니다. `/api/knowledge/context`가 인용 번호가 붙은 RAG 컨텍스트를 반환하고, `knowledge.search` capability로 MCP에도 노출됩니다. `Data/`의 PDF는 `pdftotext`가 있으면 색인됩니다.
 
-### Adding capabilities
+**보안·신뢰성** — scrypt 해시 비밀번호, 폐기 가능한 불투명 세션(토큰은 해시만 저장), HttpOnly 쿠키, 로그인 속도 제한, WebSocket 일회용 티켓, 서버 측 역할 검사, CSRF 오리진 검사, CSP, 해시 체인 감사 로그, 영속 제안·요청·버전, 시크릿은 환경에서만 읽고 응답·로그에서 제거.
 
-In-process: `defineCapability({...})` with zod input/output schemas and register it in
-`src/app.ts`. External: add an MCP server to `config/mcp-servers.json`; its tools are
-discovered from the server and registered automatically.
+## 검증 상태
 
-```json
-{
-  "servers": [
-    {
-      "name": "terrain",
-      "transport": { "type": "stdio", "command": "node", "args": ["path/to/server.js"] },
-      "provides": { "get_dem": ["data.terrain.dem"] },
-      "outputVerification": "external_data"
-    },
-    { "name": "remote", "transport": { "type": "http", "url": "https://example.org/mcp" } }
-  ]
-}
-```
+검증됨:
+- 서버 전체: 96개 테스트 (인증, 감사 체인 변조 탐지, 4개 WebSocket 동시 편집·충돌·잠금·재접속, 게임 완주, 재시작 후 대기 제안 복원 및 배포)
+- 브라우저: 26개 E2E 검사 (가입 → 미션 생성 → IWSDK 장면 렌더링 → 두 참가자 동기화 → 카탈로그 부품 GLB 배포 → 자연어 요청 → 시뮬레이션 → 평가 대시보드)
+- XR(에뮬레이터): IWSDK를 통한 `immersive-ar` 세션 시작, 컨트롤러로 공간 슬라이더 그랩, 놓을 때 편집 커밋, 데스크톱 참가자 동기화, 세션 종료
 
-`provides` maps a tool to the tags recipes look for; without it the tool is still
-available to the model planner. External output is `unverified` unless configured otherwise.
+**검증하지 못한 것**
+- **실물 헤드셋**: Quest 실기 테스트를 하지 못했습니다. 패스스루 표시, 손 추적 핀치 그랩, 텍스트 가독성·편안함, 기기 성능(프레임률)은 미확인입니다. XR에서 패널 버튼 레이 클릭, 공간 키보드, 부품 그랩·배치, 원격 참가자 아바타 표시는 코드는 있으나 자동 검사 대상이 아니었습니다.
+- **4대 동시 헤드셋**: 프로토콜 수준에서 4개 연결을 테스트했고 브라우저 E2E는 3개 컨텍스트입니다.
+- **언어 모델 경로**: API 키가 없어 스크립트된 대역으로만 테스트했습니다.
+- **GMAT**: 생성 스크립트와 `gmat.run`은 실제 GMAT으로 실행해 보지 못했습니다.
+- **TLS 제공**: 구현되어 있으나 실행해 보지 않았습니다.
+- CubeSat·화성 시나리오는 초기 설계의 유효성만 테스트했고 끝까지 플레이하지 않았습니다.
 
-## Interfaces
-
-**REST** (`/api`): `capabilities` (search, describe, `:id/execute`, `refresh`) ·
-`mission` (current, `versions`, `rollback`) · `requests` (submit, get, `trace`,
-`clarify`, `cancel`) · `proposals` (get, `approve`, `reject`) · `memory` (`search`, add,
-`:id/review`, `training-eligible`) · `health`.
-
-**WebSocket** (`/ws`): `mission.snapshot` on connect, then `mission.version_published`
-(config + derived results + which nodes were recalculated), `request.updated`,
-`proposal.created`, `capability.changed`. An MR client consumes the same messages as the
-web client and loads assets from `/assets/*.glb`.
-
-**MCP** (`/mcp`, Streamable HTTP; or stdio): discovery tools, every read-only capability,
-and `mission_request` / `request_trace`. Approval is not exposed over MCP.
-
-Roles: `viewer` (read), `engineer` (request changes, approve minor ones), `lead`
-(approve significant changes, roll back, quality-review memory).
-
-## Scientific models and their limits
-
-Two-body orbits; analytic Sun/planet positions from JPL's approximate Keplerian elements
-(cross-checked against Horizons in the test suite: within 3 arcminutes and 5×10⁻⁴ AU);
-cylindrical-shadow eclipse at the solar beta angle; orbit-average power budget;
-standard RF link equation; rigid-wheel rover statics. Each result lists its assumptions.
-Not modelled: orbital perturbations, thermal, radiation, soil mechanics, attitude.
-Beta angle is exact for Earth, approximate for the Moon, and worst-case for Mars.
-
-## Status
-
-- Verified here: the full pipeline without a model, sandbox isolation, GLB output
-  (loads in three.js), HTTP/WebSocket broadcast, MCP in both directions, Horizons.
-- **Not exercised against the live API:** the model-driven paths. They are type-checked
-  against the SDK and tested with a scripted stand-in, but no credentials were available.
-- **Not built:** an MR client (the web client and the WebSocket protocol are), real
-  authentication, generative text-to-3D, terrain DEM retrieval.
-- Proposals awaiting approval live in memory and are lost on restart; versions, request
-  traces and research memory are persisted.
+알려진 한계: RAG 컨텍스트는 API/MCP로 제공되며 요청 분석 프롬프트에 자동 주입되지는 않습니다. 검색은 어휘 기반(BM25)입니다.

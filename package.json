@@ -15,7 +15,8 @@
     "install:web": "npm --prefix apps/web install",
     "mcp": "tsx src/mcp/stdio.ts",
     "typecheck": "tsc --noEmit && npm --prefix apps/web run typecheck",
-    "test": "vitest run"
+    "test": "vitest run",
+    "e2e": "node tests/e2e/platform.e2e.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",
@@ -30,6 +31,7 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/ws": "^8.18.1",
+    "playwright-core": "^1.65.1",
     "vitest": "^5.1.0"
   }
 }

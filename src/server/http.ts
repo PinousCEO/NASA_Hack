@@ -47,7 +47,7 @@ const CSP = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
-  "connect-src 'self' ws: wss: https://cdn.jsdelivr.net https://www.gstatic.com",
+  "connect-src 'self' ws: wss: data: blob: https://cdn.jsdelivr.net https://www.gstatic.com",
   "worker-src 'self' blob:",
   "object-src 'none'",
   "base-uri 'self'",
