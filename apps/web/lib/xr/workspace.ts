@@ -14,8 +14,8 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { Collab } from "../collab";
 import { BODY_RADIUS_KM, MissionScene, type ViewMode } from "../scene/MissionScene";
-import { gradeRenderer, interceptRender, softwareGl } from "../scene/fx";
-import { createEnvironment, createLabel, createSky, forceQuality } from "../scene/space";
+import { compileAsyncOf, gradeRenderer, interceptRender, softwareGl } from "../scene/fx";
+import { createEnvironmentAsync, createLabel, createSky, deviceQuality, forceQuality } from "../scene/space";
 
 export interface XrSupport {
   webxr: boolean;
@@ -58,8 +58,10 @@ export interface WorkspaceCallbacks {
   onSelect(componentId: string | null): void;
   onXrChange(active: boolean, mode: "ar" | "vr" | null): void;
   /** High-level actions raised from spatial UI. */
-  onAction(action: { type: "simulate" } | { type: "request"; text: string } | { type: "catalog"; itemId: string } | { type: "decide"; proposalId: string; approve: boolean }): void;
+  onAction(action: { type: "simulate" } | { type: "request"; text: string } | { type: "catalog"; itemId: string } | { type: "connect"; componentId: string } | { type: "decide"; proposalId: string; approve: boolean }): void;
   notify(message: string, tone?: "info" | "warn" | "bad"): void;
+  /** The crew member turned the world or let go of it: share the moment with the rest of the crew. */
+  onClock?(clock: { timeMs: number; rate: number; turning: boolean }): void;
 }
 
 export interface SpatialStatus {
@@ -81,10 +83,16 @@ export interface Workspace {
   setSpatialStatus(status: SpatialStatus): void;
   /** Re-sync interactive objects after mission state changed. */
   refresh(): void;
+  /** Resolves when the planet imagery is on screen and shaders are compiled (or after `timeoutMs`). */
+  ready(timeoutMs?: number): Promise<void>;
+  /** Stand on the line to Earth and look back: the world shows the phase it has from home (desktop only). */
+  viewFromEarth(on: boolean): void;
+  /** Chase camera: keep the spacecraft centred and close (desktop only). */
+  follow(on: boolean): void;
   /** Frame the sunlit side; with `animate`, fly the camera in from deep space first (desktop only). */
   intro(animate?: boolean): void;
   /** World-space positions of interactive objects, for automated checks with the XR emulator. */
-  debug: { knob(id: string): number[] | null; component(id: string): number[] | null; grabbing(): number; uiVisible(): boolean };
+  debug: { knob(id: string): number[] | null; component(id: string): number[] | null; grabbing(): number; uiVisible(): boolean; timeRing(): number[] | null; turn(angleRad: number): void; camera(): number[]; quick(): string[]; pressQuick(i: number): boolean; status(): { k: string; v: string }[]; activity(): string };
   dispose(): void;
 }
 
@@ -182,23 +190,37 @@ export async function createWorkspace(container: HTMLElement, callbacks: Workspa
     forceQuality("low");
     (world.renderer as THREE.WebGLRenderer).setPixelRatio(0.6);
   }
+  else (world.renderer as THREE.WebGLRenderer).setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
   const scene = new MissionScene();
-  const sky = createSky();
+  const sky = createSky({ renderer: world.renderer as THREE.WebGLRenderer });
   const backdrop = new THREE.Color(0x000000);
   world.scene.add(sky.object);
   world.scene.background = backdrop;
   const renderer = world.renderer as THREE.WebGLRenderer;
   gradeRenderer(renderer);
+  // A canvas whose context is going away can show as a blank rectangle for a frame: hide it instead.
+  const hideCanvas = (): void => { renderer.domElement.style.visibility = "hidden"; };
+  window.addEventListener("pagehide", hideCanvas);
+  renderer.domElement.addEventListener("webglcontextlost", hideCanvas);
+  renderer.domElement.addEventListener("webglcontextrestored", () => { renderer.domElement.style.visibility = ""; });
   let environment: THREE.Texture | null = null;
   try {
-    environment = createEnvironment(renderer);
+    environment = await createEnvironmentAsync(renderer);
   } catch {
     environment = null; // image-based lighting is an enhancement; direct light still works
   }
   scene.attach(world.scene as THREE.Scene, environment);
+  const shadows = !slowGpu && deviceQuality() === "high";
+  renderer.shadowMap.enabled = shadows;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
+  scene.setShadows(shadows);
+  let fxOn = true;
   // Bloom and film grade on the desktop; `?fx=0` turns them off (slow or software GPUs).
   const fxOff = typeof location !== "undefined" && new URLSearchParams(location.search).get("fx") === "0";
-  const post = fxOff || slowGpu ? null : interceptRender(renderer, world.scene as THREE.Scene, world.camera as THREE.Camera, () => !inXr);
+  const post = fxOff || slowGpu ? null : interceptRender(renderer, world.scene as THREE.Scene, world.camera as THREE.Camera, () => !inXr && fxOn);
+  // Nothing is drawn until `ready()` has linked the programs; the timer is a backstop if it is never called.
+  post?.hold(true);
+  setTimeout(() => post?.hold(false), 9000);
   const rootEntity = world.createTransformEntity(scene.root);
   const systemsEntity = world.createTransformEntity(scene.systemsView, { parent: rootEntity } as any);
 
@@ -239,6 +261,35 @@ export async function createWorkspace(container: HTMLElement, callbacks: Workspa
     for (const [id, object] of scene.componentObjects) componentEntities.set(id, makeInteractive(object, systemsEntity, callbacks.canEdit()));
   };
   scene.onRebuild = syncComponentEntities;
+
+  // ---------- turning the world by hand ----------
+  // In a headset the planet wears a ring at its equator. Grab it and twist: the world turns, and the
+  // clock moves by the time that turn takes. On the desktop the same thing is done by dragging the planet.
+  const timeRing = new THREE.Group();
+  const ringMesh = new THREE.Mesh(new THREE.TorusGeometry(1.16, 0.012, 10, 96).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: new THREE.Color(2.4, 1.3, 0.3), transparent: true, opacity: 0.85 }));
+  const ringGrip = new THREE.Mesh(new THREE.SphereGeometry(0.06, 20, 14), new THREE.MeshStandardMaterial({ color: 0xffb020, emissive: 0x8a4a00, roughness: 0.35 }));
+  ringGrip.position.set(1.16, 0, 0);
+  timeRing.add(ringMesh, ringGrip);
+  timeRing.visible = false;
+  scene.orbitView.add(timeRing);
+  const orbitEntity = world.createTransformEntity(scene.orbitView, { parent: rootEntity } as any);
+  const timeRingEntity = world.createTransformEntity(timeRing, { parent: orbitEntity } as any);
+  timeRingEntity.addComponent(IW.Interactable);
+  timeRingEntity.addComponent(IW.OneHandGrabbable, { rotate: true, translate: true });
+  let ringHeld = false;
+  let ringYaw = 0;
+  /** Where the handle is around the equator, from wherever the hand has carried it. */
+  const handleAngle = (): number => {
+    const p = scene.orbitView.worldToLocal(ringGrip.getWorldPosition(new THREE.Vector3()));
+    return Math.atan2(-p.z, p.x);
+  };
+  let lastClockSent = 0;
+  const shareClock = (turning: boolean, force = false): void => {
+    const now = performance.now();
+    if (!force && now - lastClockSent < 90) return;
+    lastClockSent = now;
+    callbacks.onClock?.({ timeMs: scene.clockMs, rate: scene.clockRate, turning });
+  };
 
   // ---------- spatial sliders (orbit altitude, inclination, mission day) ----------
   const sliders: Slider[] = [];
@@ -437,7 +488,42 @@ export async function createWorkspace(container: HTMLElement, callbacks: Workspa
   const raycaster = new THREE.Raycaster();
   let down: { x: number; y: number } | null = null;
   const canvas = world.renderer.domElement;
-  const onDown = (e: PointerEvent): void => { down = { x: e.clientX, y: e.clientY }; };
+  let dragTurn: { x: number } | null = null;
+  const aim = (e: PointerEvent): void => {
+    const rect = canvas.getBoundingClientRect();
+    raycaster.setFromCamera(new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1), world.camera);
+  };
+  const onDown = (e: PointerEvent): void => {
+    down = { x: e.clientX, y: e.clientY };
+    if (inXr || e.button !== 0) return;
+    aim(e);
+    // On the planet: this drag turns the world (and the clock). Off it: the camera moves, as before.
+    if (scene.planetHit(raycaster)) {
+      dragTurn = { x: e.clientX };
+      controls.enabled = false;
+      scene.clockRate = 0;
+      canvas.style.cursor = "grabbing";
+      try { canvas.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
+    }
+  };
+  const onMove = (e: PointerEvent): void => {
+    if (!dragTurn) {
+      if (!inXr && e.buttons === 0) { aim(e); canvas.style.cursor = scene.planetHit(raycaster) ? "grab" : ""; }
+      return;
+    }
+    // A drag across a third of the view is one radian of turn.
+    scene.turnBy(((e.clientX - dragTurn.x) / Math.max(1, canvas.clientWidth)) * 3);
+    dragTurn.x = e.clientX;
+    shareClock(true);
+  };
+  const endTurn = (e: PointerEvent): void => {
+    if (!dragTurn) return;
+    dragTurn = null;
+    controls.enabled = !inXr;
+    canvas.style.cursor = "";
+    try { canvas.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+    shareClock(false, true);
+  };
   const onUp = (e: PointerEvent): void => {
     if (inXr || !down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
     const rect = canvas.getBoundingClientRect();
@@ -447,6 +533,9 @@ export async function createWorkspace(container: HTMLElement, callbacks: Workspa
     callbacks.collab()?.presence({ focus: hit ? `spacecraft.components.${hit.componentId}` : null }, true);
   };
   canvas.addEventListener("pointerdown", onDown);
+  canvas.addEventListener("pointermove", onMove);
+  canvas.addEventListener("pointerup", endTurn);
+  canvas.addEventListener("pointercancel", endTurn);
   canvas.addEventListener("pointerup", onUp);
 
   // ---------- grab handling and per-frame work ----------
@@ -461,6 +550,12 @@ export async function createWorkspace(container: HTMLElement, callbacks: Workspa
   };
 
   const onGrab = (entity: any): void => {
+    if (entity === timeRingEntity) {
+      ringHeld = true;
+      ringYaw = handleAngle();
+      scene.clockRate = 0;
+      return;
+    }
     const collab = callbacks.collab();
     const slider = grabTargets.get(entity);
     if (slider) {
@@ -481,6 +576,13 @@ export async function createWorkspace(container: HTMLElement, callbacks: Workspa
   };
 
   const onRelease = (entity: any): void => {
+    if (entity === timeRingEntity) {
+      ringHeld = false;
+      timeRing.position.set(0, 0, 0);
+      timeRing.scale.setScalar(1);
+      shareClock(false, true);
+      return;
+    }
     const g = grabbing.get(entity);
     grabbing.delete(entity);
     const collab = callbacks.collab();
@@ -521,6 +623,34 @@ export async function createWorkspace(container: HTMLElement, callbacks: Workspa
   let introFrom = 0;
   let introTo = 0;
   let introAngle = 0;
+  let following = false;
+  let fromEarth = false;
+  const homeward = new THREE.Vector3();
+  const craftNow = new THREE.Vector3();
+  const craftDelta = new THREE.Vector3();
+  // Frame-rate governor: if the desktop cannot hold ~40 fps, shed resolution, then effects, then shadows.
+  let slowFrames = 0;
+  let sampled = 0;
+  let sampledTime = 0;
+  let shedLevel = 0;
+  const govern = (dt: number): void => {
+    if (inXr || slowGpu || introT < 1) return;
+    sampled++;
+    sampledTime += dt;
+    if (sampled < 90) return;
+    slowFrames = sampledTime / sampled > 1 / 40 ? slowFrames + 1 : 0;
+    sampled = 0;
+    sampledTime = 0;
+    if (slowFrames < 2 || shedLevel >= 3) return;
+    slowFrames = 0;
+    shedLevel++;
+    if (shedLevel === 1) renderer.setPixelRatio(1);
+    else if (shedLevel === 2) fxOn = false;
+    else {
+      renderer.shadowMap.enabled = false;
+      scene.setShadows(false);
+    }
+  };
   const frame = (dt: number): void => {
     if (disposed) return;
     scene.update(dt);
@@ -537,8 +667,34 @@ export async function createWorkspace(container: HTMLElement, callbacks: Workspa
         if (introT >= 1) controls.enabled = true;
         return;
       }
+      if (fromEarth && scene.mode === "orbit" && scene.earthDirection(homeward)) {
+        // Stand on the line to Earth: the planet shows the phase it has from home, and it changes as time is turned.
+        const distance = Math.max(3.2, world.camera.position.distanceTo(controls.target));
+        world.camera.position.copy(controls.target).addScaledVector(homeward, distance);
+      }
+      if (following && scene.mode === "orbit") {
+        // Carry the camera along with the spacecraft so the user's own orbiting stays relative to it.
+        scene.craftPosition(craftNow);
+        craftDelta.subVectors(craftNow, controls.target);
+        world.camera.position.add(craftDelta);
+        controls.target.copy(craftNow);
+      }
       controls.update();
+      govern(dt);
       return;
+    }
+    if (ringHeld) {
+      // The hand carries the handle; the ring stays on the equator and follows it around. That angle is the turn.
+      const yaw = handleAngle();
+      let delta = yaw - ringYaw;
+      if (delta > Math.PI) delta -= Math.PI * 2;
+      if (delta < -Math.PI) delta += Math.PI * 2;
+      ringYaw = yaw;
+      scene.turnBy(delta);
+      timeRing.position.set(0, 0, 0);
+      timeRing.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+      timeRing.scale.setScalar(1);
+      shareClock(true);
     }
     for (const g of grabbing.values()) {
       if (g.kind === "slider") {
@@ -579,8 +735,15 @@ export async function createWorkspace(container: HTMLElement, callbacks: Workspa
     if (!active) xrMode = null;
     // In passthrough the real room is the backdrop: no starfield, transparent clear.
     sky.object.visible = !active || xrMode === "vr";
+    // The table-top scene is scaled, which the shadow camera does not follow.
+    scene.setShadows(!active && shadows && shedLevel < 3);
+    if (active) {
+      following = false;
+      scene.setCloseUp(false);
+    }
     world.scene.background = active && xrMode === "ar" ? null : backdrop;
     ui.visible = active;
+    timeRing.visible = active;
     controls.enabled = !active;
     layout();
     syncComponentEntities();
@@ -612,6 +775,52 @@ export async function createWorkspace(container: HTMLElement, callbacks: Workspa
       if (introT >= 1) layout();
       placeSliders();
     },
+    async ready(timeoutMs = 7000) {
+      // With post-processing the scene draws into an HDR target, so its programs are compiled for that; otherwise for the screen.
+      post?.hold(true);
+      const compile = post ? post.fx.warm() : (compileAsyncOf(renderer)?.(world.scene as THREE.Scene, world.camera as THREE.Camera) ?? Promise.resolve());
+      await Promise.race([Promise.allSettled([scene.planetReady, compile]), new Promise((resolve) => setTimeout(resolve, timeoutMs))]);
+      if (post && !inXr) {
+        // One draw with everything visible, then a normal one in the same task: only the second reaches the screen.
+        try {
+          scene.prime(true);
+          post.fx.render(0);
+        } finally {
+          scene.prime(false);
+        }
+        post.fx.render(0);
+      }
+      post?.hold(false);
+    },
+    viewFromEarth(on) {
+      if (inXr) return;
+      fromEarth = on;
+      scene.showEarthMarker(!on);
+      if (on) {
+        following = false;
+        scene.setCloseUp(false);
+        controls.target.set(0, 0, 0);
+      }
+    },
+    follow(on) {
+      if (inXr) return;
+      if (on) fromEarth = false;
+      following = on;
+      scene.setCloseUp(on);
+      if (on) {
+        scene.craftPosition(craftNow);
+        const sun = scene.sunDirection;
+        const out = craftNow.clone().normalize();
+        // Sun over the shoulder, slightly outside the orbit, so the hardware is lit and the planet fills the background.
+        const offset = sun.clone().multiplyScalar(0.4).addScaledVector(out, 0.24).add(new THREE.Vector3(0, 0.08, 0));
+        world.camera.position.copy(craftNow).add(offset);
+        controls.target.copy(craftNow);
+        controls.minDistance = 0.12;
+        controls.maxDistance = 6;
+      } else {
+        layout();
+      }
+    },
     intro(animate = true) {
       if (inXr) return;
       layout();
@@ -629,15 +838,26 @@ export async function createWorkspace(container: HTMLElement, callbacks: Workspa
       controls.enabled = false;
     },
     debug: {
+      camera: () => world.camera.position.toArray(),
+      // The labels on the headset's four quick-command buttons, and a press of one (the same handler the controller ray calls).
+      quick: () => (status?.quick ?? []).map((q) => q.label),
+      status: () => (status?.lines ?? []).map((l) => ({ k: l.k, v: l.v })),
+      activity: () => status?.activity ?? "",
+      pressQuick: (i: number) => { const b = controlPanel.buttons.find((x) => x.mesh.userData.quick === i); if (!b) return false; b.onClick(); return true; },
       knob: (id) => { const k = sliders.find((x) => x.id === id)?.knob; return k ? k.getWorldPosition(new THREE.Vector3()).toArray() : null; },
       component: (id) => scene.componentObjects.get(id)?.getWorldPosition(new THREE.Vector3()).toArray() ?? null,
-      grabbing: () => grabbing.size,
+      grabbing: () => grabbing.size + (ringHeld ? 1 : 0),
+      timeRing: () => (timeRing.visible ? [...ringGrip.getWorldPosition(new THREE.Vector3()).toArray(), ...scene.orbitView.getWorldPosition(new THREE.Vector3()).toArray()] : null),
+      turn: (angle) => { scene.clockRate = 0; scene.turnBy(angle); shareClock(false, true); },
       uiVisible: () => ui.visible && ui.parent !== null,
     },
     dispose() {
       disposed = true;
       clearInterval(sessionWatch);
       canvas.removeEventListener("pointerdown", onDown);
+      canvas.removeEventListener("pointermove", onMove);
+      canvas.removeEventListener("pointerup", endTurn);
+      canvas.removeEventListener("pointercancel", endTurn);
       canvas.removeEventListener("pointerup", onUp);
       controls.dispose();
       post?.restore();

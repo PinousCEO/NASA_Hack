@@ -87,7 +87,13 @@ interface Entry {
   candidate: MissionConfig | null;
 }
 
+/** Flies a mission design through its simulated flight; supplied by the session, which knows the in-flight events. */
+export type FlightTest = (config: MissionConfig) => { days: number; kpis: { totalDataReturnedGb: number; totalDataLostGb: number; daysPowerNegative: number; daysInstrumentsOff: number; scienceDeliveredFraction: number; daysControlActive: number }; controlLog: { day: number; effect: string; note?: string }[]; returnedByInstrument: { instrumentId: string; name: string; returnedGb: number; lostGb: number }[] };
+
 export class ProposalService {
+  /** When set, a change to the wiring or control logic is flown with and without the change, and the difference reported. */
+  flightTest: FlightTest | null = null;
+
   private readonly entries = new Map<string, Entry>();
 
   /**
@@ -213,6 +219,37 @@ export class ProposalService {
       });
     }
 
+    // New onboard behaviour is tested by flying it: the same mission, the same in-flight events, with and without the change.
+    const flightLines: string[] = [];
+    if (candidate && this.flightTest && configDiff.some((d) => d.path.startsWith("systems.controllers"))) {
+      try {
+        const before = this.flightTest(head.config);
+        const after = this.flightTest(candidate);
+        const n = (v: number, digits = 1): string => v.toFixed(digits);
+        flightLines.push(
+          `Flight test over ${after.days} days with the same in-flight events — before → after this change:`,
+          `science data returned: ${n(before.kpis.totalDataReturnedGb)} → ${n(after.kpis.totalDataReturnedGb)} Gb`,
+          `science data lost on board: ${n(before.kpis.totalDataLostGb)} → ${n(after.kpis.totalDataLostGb)} Gb`,
+          `days with negative power margin: ${before.kpis.daysPowerNegative} → ${after.kpis.daysPowerNegative}`,
+          `days with instruments forced off by an empty battery: ${before.kpis.daysInstrumentsOff} → ${after.kpis.daysInstrumentsOff}`,
+          `days the control logic acted: ${before.kpis.daysControlActive} → ${after.kpis.daysControlActive}`,
+          ...after.returnedByInstrument.map((r) => { const b = before.returnedByInstrument.find((x) => x.instrumentId === r.instrumentId); return `${r.name}: returned ${n(b?.returnedGb ?? 0)} → ${n(r.returnedGb)} Gb, lost on board ${n(b?.lostGb ?? 0)} → ${n(r.lostGb)} Gb`; }),
+          ...after.controlLog.slice(0, 4).map((e) => `day ${e.day}: ${e.note ? `${e.note} — ` : ""}${e.effect}`),
+        );
+        const acted = after.kpis.daysControlActive > 0 || after.controlLog.length > 0;
+        tests.push({
+          id: "systems.flight",
+          description: "The control logic runs in the flight simulation",
+          status: acted ? "pass" : "warn",
+          detail: acted
+            ? `Flown for ${after.days} days: it acted on ${after.kpis.daysControlActive} day(s); data returned ${n(before.kpis.totalDataReturnedGb)} → ${n(after.kpis.totalDataReturnedGb)} Gb, negative-power days ${before.kpis.daysPowerNegative} → ${after.kpis.daysPowerNegative}`
+            : `Flown for ${after.days} days: its conditions never held, so it changed nothing on this flight`,
+        });
+      } catch (err) {
+        tests.push({ id: "systems.flight", description: "The control logic runs in the flight simulation", status: "fail", detail: `The flight simulation failed with this change: ${err instanceof Error ? err.message : String(err)}` });
+      }
+    }
+
     const significance = significanceOf(configDiff, regressions);
     const explanation = [
       `${configDiff.length} configuration value(s) change relative to mission version ${head.version}.`,
@@ -221,6 +258,7 @@ export class ProposalService {
         .filter((c) => typeof c.delta === "number")
         .slice(0, 12)
         .map((c) => `${c.node} · ${c.metric}: ${Number(c.before).toPrecision(5)} → ${Number(c.after).toPrecision(5)}`),
+      ...flightLines,
       tests.some((t) => t.status === "fail") ? "One or more automated tests fail; the proposal cannot be approved as it stands." : "All blocking automated tests pass.",
     ];
     return {
@@ -254,7 +292,7 @@ export class ProposalService {
   }
 
   /** Approve and publish. Throws with a reason when approval is not permitted. */
-  async approve(id: string, approver: User, reason: string): Promise<{ proposal: Proposal; version: MissionVersion }> {
+  async approve(id: string, approver: User, reason: string, options: { acceptEngineeringViolations?: boolean } = {}): Promise<{ proposal: Proposal; version: MissionVersion }> {
     const entry = this.entries.get(id);
     if (!entry) throw new Error(`Proposal "${id}" not found`);
     const { proposal, draft } = entry;
@@ -273,7 +311,12 @@ export class ProposalService {
         throw new Error(`After rebasing onto version ${head.version} this is a ${proposal.significance} change and requires role "${proposal.requiredRole}"`);
       }
     }
-    const failing = proposal.tests.filter((t) => t.status === "fail");
+    // Failing tests block approval. The one exception is a person's explicit decision to accept a change whose only
+    // failures are engineering limits (too heavy, over budget, a link that no longer closes): the limit then stays
+    // visible as a violated constraint and costs score until the design is fixed. Structural, integrity and script
+    // failures can never be accepted.
+    const failed = proposal.tests.filter((t) => t.status === "fail");
+    const failing = options.acceptEngineeringViolations ? failed.filter((t) => !t.id.startsWith("engineering.")) : failed;
     if (failing.length || !entry.candidate) {
       throw new Error(`Cannot approve: ${failing.length} automated test(s) fail (${failing.map((t) => t.id).join(", ")})`);
     }

@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import Backdrop from "@/components/Backdrop";
-import { api, currentAccount } from "@/lib/api";
+import { go as navigate, api, currentAccount } from "@/lib/api";
 
 export default function AuthPage() {
   const [mode, setMode] = useState<"login" | "register">("login");
@@ -13,7 +13,7 @@ export default function AuthPage() {
     return target.startsWith("/") && !target.startsWith("//") ? target : "/lobby"; // same-site only
   };
   useEffect(() => {
-    void currentAccount().then((a) => a && (window.location.href = next()));
+    void currentAccount().then((a) => a && (navigate(next())));
   }, []);
 
   const submit = async (e: React.FormEvent): Promise<void> => {
@@ -22,7 +22,7 @@ export default function AuthPage() {
     setError(null);
     try {
       await api("POST", `/api/auth/${mode}`, mode === "register" ? form : { username: form.username, password: form.password });
-      window.location.href = next();
+      navigate(next());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
       setBusy(false);

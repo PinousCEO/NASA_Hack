@@ -4,23 +4,29 @@
  * stage is an IWSDK world, the HUD is DOM on desktop and spatial panels in XR, and both
  * are driven by the same authoritative snapshot over the same WebSocket.
  */
+import { PartCard, SystemsPanel } from "@/components/MissionSystems";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Transport, Viewfinder } from "@/components/MissionExtras";
+import { MissionClock } from "@/components/MissionClock";
+import { AiQueue, Coach, EXPLAIN, Tutorial, Viewfinder } from "@/components/MissionExtras";
+import { DefineMission, DesignsPanel } from "@/components/MissionGame";
 import { AiPanel, AnalysisPanel, type Ctx, DesignPanel, EvaluationDashboard, LogPanel, ObjectivesPanel, ReviewPanel } from "@/components/MissionPanels";
-import { type Account, api, currentAccount, type Evaluation, fmt, type Presence, type Snapshot } from "@/lib/api";
+import { go as navigate, type Account, api, currentAccount, type Evaluation, fmt, type Presence, type Snapshot } from "@/lib/api";
+import { bus } from "@/lib/bus";
 import { Collab } from "@/lib/collab";
 import type { ViewMode } from "@/lib/scene/MissionScene";
 import type { SpatialStatus, Workspace, XrSupport } from "@/lib/xr/workspace";
 
 const PHASES = ["concept", "trade", "design", "review", "submitted"];
 type Toast = { id: number; message: string; tone: string; out?: boolean };
-type Tab = "design" | "ai" | "analysis" | "review" | "log";
+type Tab = "design" | "ai" | "analysis" | "designs" | "review" | "log" | "systems";
 
 /** Headline metrics, each tied to the engineering model that produces it (so it can pulse when recalculated). */
 function metrics(snap: Snapshot): { node: string; k: string; v: string; u: string; tone?: string }[] {
   const d = (id: string): any => snap.mission.derived[id]?.value ?? {};
   const bad = (cond: boolean): string | undefined => (cond ? "bad" : undefined);
-  const [el, ecl, pw, link, data, mass, cost, rover] = ["orbit.elements", "orbit.eclipse", "power.budget", "comms.link", "data.budget", "mass.budget", "cost.budget", "rover.performance"].map(d);
+  const [el, ecl, pw, link, data, mass, cost, rover, schedule, launch] = ["orbit.elements", "orbit.eclipse", "power.budget", "comms.link", "data.budget", "mass.budget", "cost.budget", "rover.performance", "schedule.budget", "launch.vehicle"].map(d);
+  // Once a launch vehicle is chosen, its capacity is the mass limit that binds.
+  const massMargin = launch.selectedId ? launch.marginKg : mass.marginKg;
   return [
     { node: "orbit.elements", k: "Altitude", v: fmt(el.periapsisAltitudeKm), u: "km" },
     { node: "orbit.elements", k: "Period", v: fmt(el.periodS / 60), u: "min" },
@@ -29,8 +35,9 @@ function metrics(snap: Snapshot): { node: string; k: string; v: string; u: strin
     { node: "power.budget", k: "Battery DoD", v: pw.depthOfDischarge === null ? "–" : fmt(pw.depthOfDischarge * 100), u: "%", tone: bad(!pw.batteryAdequate) },
     { node: "comms.link", k: "Link margin", v: fmt(link.worstMarginDb), u: "dB", tone: bad(link.worstMarginDb !== null && link.worstMarginDb < 0) },
     { node: "data.budget", k: "Data return", v: fmt(data.returnedGbPerDay), u: "Gb/day" },
-    { node: "mass.budget", k: "Mass margin", v: fmt(mass.marginKg), u: "kg", tone: bad(mass.marginKg !== null && mass.marginKg < 0) },
+    { node: launch.selectedId ? "launch.vehicle" : "mass.budget", k: "Mass margin", v: fmt(massMargin), u: "kg", tone: bad(massMargin !== null && massMargin < 0) },
     { node: "cost.budget", k: "Cost margin", v: fmt(cost.marginMusd), u: "$M", tone: bad(cost.marginMusd !== null && cost.marginMusd < 0) },
+    ...(schedule.marginMonths !== null && schedule.marginMonths !== undefined ? [{ node: "schedule.budget", k: "Schedule margin", v: fmt(schedule.marginMonths), u: "months", tone: bad(schedule.marginMonths < 0) }] : []),
     ...(snap.mission.config.rover ? [{ node: "rover.performance", k: "Rover slope margin", v: fmt(rover.slopeMarginDeg), u: "°", tone: bad(rover.slopeMarginDeg < 0) }] : []),
   ];
 }
@@ -44,7 +51,7 @@ export default function MissionPage() {
   const [proposals, setProposals] = useState<any[]>([]);
   const [link, setLink] = useState<{ status: string; detail?: string }>({ status: "connecting" });
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("design");
+  const [tab, setTab] = useState<Tab>("ai");
   const [mode, setMode] = useState<ViewMode>("orbit");
   const [selected, setSelected] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -54,7 +61,11 @@ export default function MissionPage() {
   const [dashboard, setDashboard] = useState<{ evaluation: Evaluation; submission?: any } | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [you, setYou] = useState<any>(null);
-  const [arriving, setArriving] = useState(false);
+  const [arriving, setArriving] = useState<false | "hold" | "fly">(false);
+  const seenRequests = useRef(new Set<string>());
+  const [chase, setChase] = useState(false);
+  const [earthView, setEarthView] = useState(false);
+  const [defining, setDefining] = useState(false);
 
   const stage = useRef<HTMLDivElement>(null);
   const collab = useRef<Collab | null>(null);
@@ -81,19 +92,25 @@ export default function MissionPage() {
 
   const setPreviewDay = useCallback((day: number | null) => {
     setPreviewDayState(day);
-    workspace.current?.scene.setPreviewDay(day);
+    const scene = workspace.current?.scene;
+    if (!scene) return;
+    scene.setClock(scene.missionDateMs + (day ?? 0) * 86400000, 0);
+    collab.current?.clock(scene.clockMs, scene.clockRate);
   }, []);
+  // The crew's shared clock: who last turned it, and the moment to adopt on arrival.
+  const [remoteClock, setRemoteClock] = useState<{ by: string; at: number } | null>(null);
+  const arrivalClock = useRef<{ timeMs: number; rate: number; at: number } | null>(null);
 
   // ---------- boot: account, session membership, collaboration channel ----------
   useEffect(() => {
     const id = new URLSearchParams(window.location.search).get("s");
-    if (!id) { window.location.href = "/lobby"; return; }
+    if (!id) { navigate("/lobby"); return; }
     setSid(id);
     let cancelled = false;
     void (async () => {
       const acc = await currentAccount();
       if (cancelled) return;
-      if (!acc) { window.location.href = `/auth?next=${encodeURIComponent(`/mission?s=${id}`)}`; return; }
+      if (!acc) { navigate(`/auth?next=${encodeURIComponent(`/mission?s=${id}`)}`); return; }
       setAccount(acc);
       try {
         // Not a member yet? Public missions can be joined directly from their link.
@@ -109,6 +126,13 @@ export default function MissionPage() {
       setYou(first.you);
       const channel = new Collab(id, {
         snapshot: (s) => {
+          const shared = (s as any).clock as { timeMs: number; rate: number; at: number } | null;
+          if (shared) {
+            // Join the crew at the moment they are looking at (carried forward by the time since it was set).
+            const now = shared.timeMs + ((Date.now() - shared.at) / 1000) * shared.rate * 1000;
+            arrivalClock.current = { ...shared, timeMs: now };
+            workspace.current?.scene.setClock(now, shared.rate);
+          }
           setSnap((prev) => ({ ...(prev ?? first), ...s, inviteCode: prev?.inviteCode ?? first.inviteCode }));
           setYou((prev: any) => ({ ...prev, ...s.you, role: s.you.role }));
           if (s.resumed && s.missed.length) toast(`Reconnected. While you were away: ${s.missed.map((m: any) => `${m.by} — ${m.note}`).slice(-3).join("; ")}`, "info");
@@ -129,9 +153,21 @@ export default function MissionPage() {
         presence: setPresence,
         presenceUpdate: (p) => setPresence((list) => (list.some((x) => x.clientId === p.clientId) ? list.map((x) => (x.clientId === p.clientId ? { ...x, ...p } : x)) : [...list, p])),
         locks: (locks) => setSnap((prev) => prev && { ...prev, locks }),
-        request: (r) => setRequests((list) => [r, ...list.filter((x) => x.id !== r.id)].slice(0, 20)),
+        request: (r) => {
+          setRequests((list) => [r, ...list.filter((x) => x.id !== r.id)].slice(0, 20));
+          // Everyone sees when a teammate puts something to the AI.
+          if (!seenRequests.current.has(r.id)) {
+            seenRequests.current.add(r.id);
+            if (r.user?.id !== acc.id) toast(`${first.session.members.find((m: any) => m.accountId === r.user?.id)?.displayName ?? "A teammate"} asked the AI: ${String(r.text).slice(0, 90)}`, "info");
+          }
+        },
         proposal: (p) => setProposals((list) => [p, ...list.filter((x) => x.id !== p.id)]),
         transform: (t) => workspace.current?.scene.previewTransform(t.nodeId, t.pose),
+        clock: (k) => {
+          // A crewmate turned the world: this scene follows.
+          workspace.current?.scene.setClock(k.timeMs, k.rate);
+          setRemoteClock({ by: k.by, at: Date.now() });
+        },
         status: (status, detail) => setLink({ status, detail }),
       });
       collab.current = channel;
@@ -155,9 +191,10 @@ export default function MissionPage() {
       const ws = await createWorkspace(stage.current!, {
         collab: () => collab.current,
         canEdit: () => youRef.current?.role !== "viewer" && !snapRef.current?.game.submitted,
-        onSelect: (id) => { setSelected(id); if (id) setTab("design"); },
+        onSelect: (id) => setSelected(id),
         onXrChange: (active, m) => setXr((x) => ({ ...x, active, mode: m })),
         notify: toast,
+        onClock: (k) => collab.current?.clock(k.timeMs, k.rate),
         onAction: (a) => {
           const id = collab.current?.sessionId;
           if (!id) return;
@@ -165,21 +202,33 @@ export default function MissionPage() {
           if (a.type === "simulate") run(api("POST", `/api/sessions/${id}/simulate`, {}));
           else if (a.type === "request") run(api("POST", `/api/sessions/${id}/requests`, { text: a.text }));
           else if (a.type === "catalog") run(api("POST", `/api/sessions/${id}/catalog`, { itemId: a.itemId }));
+          else if (a.type === "connect") run(api("POST", `/api/sessions/${id}/connect`, { componentId: a.componentId }));
           else run(api("POST", `/api/sessions/${id}/proposals/${a.proposalId}/${a.approve ? "approve" : "reject"}`, { reason: a.approve ? "Approved in XR" : "Rejected in XR" }));
         },
       });
       if (disposed) return ws.dispose();
       workspace.current = ws;
       (window as any).__workspace = ws; // exposed for automated checks
+      (window as any).__collabEdit = (patches: any[], summary: string) => collab.current?.edit(patches, summary);
+      (window as any).__select = (id: string | null) => setSelected(id);
       ws.scene.setMission(snapRef.current!.mission);
+      if (arrivalClock.current) ws.scene.setClock(arrivalClock.current.timeMs, arrivalClock.current.rate);
       ws.refresh();
       setXr((x) => ({ ...x, support: ws.support }));
       // Arrival sequence: title card over a camera fly-in from deep space. `?intro=0` skips it.
       const cinematic = new URLSearchParams(window.location.search).get("intro") !== "0" && new URLSearchParams(window.location.search).get("iwer") !== "1";
-      ws.intro(cinematic);
       if (cinematic) {
-        setArriving(true);
+        // Hold the title card on black until imagery and shaders are ready, so the fly-in plays without a hitch.
+        setArriving("hold");
+        ws.intro(false);
+        await ws.ready();
+        if (disposed) return;
+        ws.intro(true);
+        setArriving("fly");
         setTimeout(() => setArriving(false), 4600);
+      } else {
+        ws.intro(false);
+        void ws.ready();
       }
     })().catch((err) => toast(`3D view could not start: ${err.message}`, "bad"));
     return () => { disposed = true; };
@@ -197,32 +246,57 @@ export default function MissionPage() {
   useEffect(() => { workspace.current?.scene.setPresence(presence, presence.find((p) => p.accountId === account?.id && p.mode === (xr.active ? "xr" : "desktop"))?.clientId ?? null); }, [presence, account, xr.active]);
   useEffect(() => { workspace.current?.setMode(mode); }, [mode]);
 
+
+  useEffect(() => bus.listen("ask", () => setTab("ai")), []);
+  // A submission made from the mission guide opens the debrief here.
+  useEffect(() => bus.listen("submitted", (r) => setDashboard(r as { evaluation: Evaluation; submission?: any })), []);
+
   const tiles = useMemo(() => (snap ? metrics(snap) : []), [snap]);
   useEffect(() => {
     const ws = workspace.current;
     if (!ws || !snap) return;
     const pending = proposals.find((p) => p.status === "awaiting_approval");
-    const latest = requests[0];
+    const mine = requests.find((r) => !r.private && r.user?.id === account?.id);
+    // The headset shows the same things as the desktop, in the same order: does the mission work, what is not connected,
+    // what the control logic is, then the numbers. Its quick commands follow the state of the design.
+    const wiring = snap.mission.derived["systems.wiring"]?.value as any;
+    const loose: any[] = (wiring?.parts ?? []).filter((p: any) => p.notes.length > 0);
+    const controllers: any[] = snap.mission.config.systems?.controllers ?? [];
+    const outcome = snap.evaluation.outcome;
+    const part = selected ? snap.mission.config.spacecraft.components.find((x: any) => x.id === selected) : null;
+    const partStatus = part ? (wiring?.parts ?? []).find((p: any) => p.id === part.id) : null;
+    const aboard = new Set(snap.mission.config.spacecraft.components.map((x: any) => x.name));
+    const payload = snap.scenario.catalog.filter((i: any) => i.discipline === "payload" && !aboard.has(i.component.name));
+    const quick: SpatialStatus["quick"] = [
+      loose[0] ? { label: `Connect ${String(loose[0].name).slice(0, 22)}`, action: { type: "connect" as const, componentId: loose[0].id } } : { label: `Add ${payload[0]?.label.split(" · ")[0] ?? "an instrument"}`, action: payload[0] ? { type: "catalog" as const, itemId: payload[0].id } : { type: "request" as const, text: "What instrument should we add first, and what does each option cost?" } },
+      { label: "What holds us back?", action: { type: "request" as const, text: "What is holding this mission back right now? Give the numbers, and the ways to deal with it with what each costs." } },
+      controllers.length ? { label: "Fly the mission", action: { type: "simulate" as const } } : { label: "Add power-saving logic", action: { type: "request" as const, text: "Make a controller: when power runs short, run the instruments a quarter of the time, and go back to normal once the battery is nearly full." } },
+      controllers.length ? { label: "Send hydrogen data first", action: { type: "request" as const, text: "Change the control logic so the most important instrument's data is always sent down first." } } : { label: "Fly the mission", action: { type: "simulate" as const } },
+    ];
     const status: SpatialStatus = {
       title: snap.mission.config.meta.name,
       lines: [
-        { k: "Score", v: `${snap.evaluation.score.toFixed(1)} · ${snap.evaluation.grade}` },
-        { k: "Maturity", v: `CML ${snap.maturity.level} · ${snap.game.phase}` },
-        ...tiles.filter((t) => ["Power margin", "Link margin", "Data return", "Mass margin", "Cost margin"].includes(t.k)).map((t) => ({ k: t.k, v: `${t.v} ${t.u}`, tone: (t.tone ?? "ok") as "ok" | "bad" })),
+        { k: "Mission", v: outcome ? ({ not_ready: "not ready to fly", ready_to_fly: "ready to fly", success: "SUCCESS", partial: "partial success", failed: "FAILED in flight" } as Record<string, string>)[outcome.verdict]! : "–", tone: (outcome && ["not_ready", "failed"].includes(outcome.verdict) ? "bad" : "ok") as "ok" | "bad" },
+        { k: "Open", v: outcome?.conditions.find((k) => k.met === false)?.title ?? outcome?.conditions.find((k) => k.met === null)?.evidence ?? "nothing" },
+        { k: "Wiring", v: wiring?.wired ? `${wiring.links.length} lines · ${loose.length ? `${loose.length} part(s) not fully connected` : "all connected"}` : "–", tone: (loose.length ? "bad" : "ok") as "ok" | "bad" },
+        { k: "Control", v: controllers.length ? controllers.map((k) => `${k.name}${k.enabled ? "" : " (off)"}`).join(", ").slice(0, 60) : "no control logic yet" },
+        ...tiles.filter((t) => ["Power margin", "Link margin", "Data return"].includes(t.k)).map((t) => ({ k: t.k, v: `${t.v} ${t.u}`, tone: (t.tone ?? "ok") as "ok" | "bad" })),
       ],
-      footer: `v${snap.mission.version} · ${presence.length} participant${presence.length === 1 ? "" : "s"} · ${snap.checks.filter((c) => c.status === "fail").length} constraint(s) violated`,
-      quick: snap.scenario.catalog.filter((i: any) => i.discipline === "payload").slice(0, 3).map((i: any) => ({ label: `Add ${i.label.split(" · ")[0]}`, action: { type: "catalog" as const, itemId: i.id } })).concat([{ label: "Compute the link budget", action: { type: "request" as const, text: "Compute the link budget" } as any }]),
-      pending: pending ? { proposalId: pending.id, summary: requests.find((r) => r.proposalId === pending.id)?.text ?? "change", canApprove: you?.role === "lead" || (you?.role === "engineer" && pending.requiredRole === "engineer") } : null,
-      activity: latest ? `${latest.text} — ${String(latest.status).replace(/_/g, " ")}` : "Grab a slider or a component, or use a quick command.",
+      footer: `${snap.evaluation.score.toFixed(0)} pts · v${snap.mission.version} · ${presence.length} participant${presence.length === 1 ? "" : "s"} · ${snap.checks.filter((c) => c.status === "fail").length} constraint(s) violated`,
+      quick,
+      pending: pending ? { proposalId: pending.id, summary: requests.find((r) => r.proposalId === pending.id)?.summary ?? requests.find((r) => r.proposalId === pending.id)?.text ?? "change", canApprove: you?.role === "lead" || (you?.role === "engineer" && pending.requiredRole === "engineer") } : null,
+      // A selected part speaks first: what it is and what its lines deliver. Otherwise the player's own AI's latest reply.
+      activity: part
+        ? `${part.name}: ${partStatus?.notes.length ? partStatus.notes.join(" ") : `fully connected${partStatus?.commandable ? ", commandable by control logic" : ""}`} · ${(snap.mission.config.systems?.links ?? []).filter((l: any) => l.from.node === part.id || l.to.node === part.id).map((l: any) => `${l.kind}${l.rating ? ` ${l.rating}${l.kind === "power" ? " W" : " bit/s"}` : ""}`).join(", ") || "no lines"}`
+        : mine ? (mine.answer?.text ? `AI: ${String(mine.answer.text).slice(0, 260)}` : `${mine.text} — ${String(mine.status).replace(/_/g, " ")}`) : "Carry the ring's handle to turn time, grab a slider or a part, or ask the AI with a quick command.",
     };
     ws.setSpatialStatus(status);
-  }, [snap, tiles, proposals, requests, presence, you]);
+  }, [snap, tiles, proposals, requests, presence, you, previewDay, selected, account]);
 
   if (error) return <div className="page center" style={{ minHeight: "100vh" }}><div className="glass card" style={{ maxWidth: 420 }}><h2>Cannot open this mission</h2><p className="dim" style={{ margin: "10px 0" }}>{error}</p><a className="btn" href="/lobby">Back to missions</a></div></div>;
 
   const ctx: Ctx | null = snap && collab.current && account && sid ? { sid, snap, collab: collab.current, role: you?.role ?? "viewer", accountId: account.id, presence, requests, proposals, selected, setSelected, toast, setPreviewDay, reloadLists } : null;
   const phaseIndex = snap ? PHASES.indexOf(snap.game.phase) : 0;
-  const duration = snap?.mission.config.meta.missionDurationDays ?? 365;
   const support = xr.support;
 
   return (
@@ -235,7 +309,7 @@ export default function MissionPage() {
             <a className="brand" href="/lobby" title="Back to missions"><span className="brand-mark" /></a>
             <div className="grow">
               <div style={{ font: "800 16px var(--font-display)", fontStretch: "118%", textTransform: "uppercase", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{snap.session.name}</div>
-              <div className="dim" style={{ fontSize: 11 }}>{snap.scenario.title} · {snap.session.difficulty} · seed {snap.session.seed}</div>
+              <div className="dim" style={{ fontSize: 11 }}>{snap.session.mode === "sandbox" ? "Sandbox · unranked · " : ""}{snap.scenario.title} · {snap.session.difficulty} · seed {snap.session.seed}</div>
             </div>
             <div className="phase">{PHASES.map((p, i) => <span key={p} className={`step ${i < phaseIndex ? "done" : i === phaseIndex ? "now" : ""}`}>{p}</span>)}</div>
             <button className="score-ring" style={{ ["--p" as any]: snap.evaluation.score, border: 0, cursor: "pointer" }} title="Open the evaluation dashboard" onClick={() => setDashboard({ evaluation: snap.evaluation })}><span>{snap.evaluation.score.toFixed(0)}</span></button>
@@ -252,42 +326,48 @@ export default function MissionPage() {
             {support && !support.immersiveAr && !support.immersiveVr && <span className="chip" title={support.reason ?? ""} style={{ cursor: "help" }}>Desktop mode · XR unavailable</span>}
           </header>
 
-          <aside className="glass left"><ObjectivesPanel c={ctx} /></aside>
+          <aside className="glass left"><ObjectivesPanel c={ctx} onDefine={() => setDefining(true)} openTab={(t) => setTab(t as Tab)} /></aside>
           <div className="mid">
             <Viewfinder snap={snap} mode={mode} />
+            <AiQueue requests={requests} members={snap.session.members} onOpen={() => setTab("ai")} />
+            <Tutorial />
+            {selected && (() => {
+              const part = snap.mission.config.spacecraft.components.find((x: any) => x.id === selected);
+              if (!part) return null;
+              return <PartCard c={ctx} part={part} onClose={() => setSelected(null)} onAdjust={() => setTab("design")} />;
+            })()}
             <button className="btn sm ghost" style={{ position: "absolute", left: 8, top: 8, pointerEvents: "auto" }} onClick={() => setCollapsed(!collapsed)}>{collapsed ? "▸ Objectives" : "◂"}</button>
-            <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(118px, 1fr))", gap: 8, pointerEvents: "auto" }}>
+            {mode === "orbit" && <button className={`btn sm ${chase ? "primary" : ""}`} style={{ position: "absolute", right: 8, top: 40, pointerEvents: "auto" }} title="Fly the camera alongside the spacecraft" onClick={() => { const next = !chase; setChase(next); if (next) setEarthView(false); workspace.current?.follow(next); }}>{chase ? "◉ Craft cam" : "Craft cam"}</button>}
+            {mode === "orbit" && snap.mission.config.centralBody !== "earth" && <button className={`btn sm ${earthView ? "primary" : ""}`} style={{ position: "absolute", right: 8, top: 74, pointerEvents: "auto" }} title="Look back from Earth: see the phase this world shows from home, and watch it change as you turn time" onClick={() => { const next = !earthView; setEarthView(next); if (next) setChase(false); workspace.current?.viewFromEarth(next); }}>{earthView ? "◉ From Earth" : "From Earth"}</button>}
+            <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", gap: 8, pointerEvents: "auto" }}><Coach snap={snap} /><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(118px, 1fr))", gap: 8 }}>
               {tiles.map((t) => (
-                <div key={`${t.k}:${pulsed.nodes.includes(t.node) ? pulsed.key : 0}`} className={`metric glass ${pulsed.nodes.includes(t.node) ? "pulse" : ""}`} title={`From model: ${t.node}`}>
+                <div key={`${t.k}:${pulsed.nodes.includes(t.node) ? pulsed.key : 0}`} className={`metric glass ${pulsed.nodes.includes(t.node) ? "pulse" : ""}`} title={`${EXPLAIN[t.k] ?? ""} (model: ${t.node})`}>
                   <div className="k">{t.k}</div><div className="v" style={{ color: t.tone === "bad" ? "var(--red)" : undefined }}>{t.v}<span className="u">{t.u}</span></div>
                 </div>
               ))}
-            </div>
+            </div></div>
           </div>
           <aside className="glass right">
-            <div className="tabs">{(["design", "ai", "analysis", "review", "log"] as Tab[]).map((t) => <button key={t} className={`tab ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>{t === "ai" ? `AI${proposals.some((p) => p.status === "awaiting_approval") ? " •" : ""}` : t}</button>)}</div>
+            <div className="tabs">{(["ai", "design", "systems", "analysis", "designs", "review", "log"] as Tab[]).map((t) => <button key={t} className={`tab ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>{t === "ai" ? `AI${proposals.some((p) => p.status === "awaiting_approval") ? " •" : ""}` : t}</button>)}</div>
             {tab === "design" && <DesignPanel c={ctx} />}
             {tab === "ai" && <AiPanel c={ctx} />}
+            {tab === "systems" && <SystemsPanel c={ctx} />}
             {tab === "analysis" && <AnalysisPanel c={ctx} previewDay={previewDay} />}
+            {tab === "designs" && <DesignsPanel c={ctx} />}
             {tab === "review" && <ReviewPanel c={ctx} onSubmitted={(evaluation, submission) => setDashboard({ evaluation, submission })} />}
             {tab === "log" && <LogPanel c={ctx} />}
           </aside>
 
           <footer className="glass bottom">
-            <Transport day={previewDay} duration={duration} start={snap.mission.config.missionTime} onDay={setPreviewDay}>
-              {previewDay !== null && previewDay > 0 && <>
-                <button className="btn sm" disabled={ctx.role === "viewer" || Boolean(snap.game.submitted)} onClick={() => { const date = new Date(Date.parse(snap.mission.config.missionTime) + previewDay * 86400000).toISOString().replace(/\.\d{3}Z$/, "Z"); void collab.current!.edit([{ op: "set", path: "missionTime", value: date }], `Mission date → ${date.slice(0, 10)}`).then((r) => { if (!r.ok) toast(r.detail ?? "Not accepted", "warn"); setPreviewDay(null); }); }}>Set as mission date</button>
-                <button className="btn sm ghost" onClick={() => setPreviewDay(null)}>Reset</button>
-              </>}
-            </Transport>
-            {previewDay ? <div className="faint" style={{ fontSize: 11, marginTop: 4 }}>Preview rotates the Sun about the ecliptic pole to show the eclipse arc on that day. Numbers update when the date is set — or run the mission simulation for the whole year.</div> : null}
+            <MissionClock c={ctx} workspace={() => workspace.current} onDay={setPreviewDayState} remote={remoteClock} />
           </footer>
         </div>
       )}
       {xr.active && <div style={{ position: "absolute", left: 16, bottom: 16, zIndex: 6 }} className="glass card"><b>{xr.mode === "ar" ? "Mixed reality" : "VR"} session active</b><div className="dim">The workspace is on your headset. <button className="btn sm" onClick={() => workspace.current?.exitXr()}>Exit XR</button></div></div>}
-      {arriving && snap && <div className="launch-veil" aria-hidden><div className="count"><span><small>Mission control · link established</small>{snap.mission.config.spacecraft.name}</span></div></div>}
+      {arriving && snap && <div key={arriving} className={`launch-veil ${arriving === "hold" ? "hold" : ""}`} aria-hidden><div className="count"><span><small>Mission control · link established</small>{snap.mission.config.spacecraft.name}</span></div></div>}
       <div className="toasts">{toasts.map((t) => <div key={t.id} className={`glass toast ${t.out ? "out" : ""}`}><span className={`chip ${t.tone === "info" ? "info" : t.tone}`}><span className="dot" /></span><span>{t.message}</span></div>)}</div>
-      {dashboard && snap && <EvaluationDashboard evaluation={dashboard.evaluation} submission={dashboard.submission} title={snap.session.name} onClose={() => setDashboard(null)} />}
+      {defining && ctx && <DefineMission c={ctx} onClose={() => setDefining(false)} />}
+      {dashboard && snap && <EvaluationDashboard checks={snap.checks} evaluation={dashboard.evaluation} submission={dashboard.submission} title={snap.session.name} onClose={() => setDashboard(null)} />}
     </div>
   );
 }

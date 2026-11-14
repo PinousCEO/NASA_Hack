@@ -8,6 +8,8 @@
  * shared (`userData.shared`), so rebuilding a spacecraft allocates only geometry.
  */
 import * as THREE from "three";
+import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
 // ---------- procedural textures ----------
 function lattice(ix: number, iy: number, period: number, seed: number): number {
@@ -82,7 +84,7 @@ const solarCellMap = (): THREE.CanvasTexture => canvasTexture(512, (ctx, s) => {
     for (let c = 0; c < cols; c++) {
       const x = c * w + gap / 2, y = r * h + gap / 2, cw = w - gap, ch = h - gap, crop = 16;
       const g = ctx.createLinearGradient(x, y, x + cw, y + ch);
-      g.addColorStop(0, "#0b1238"); g.addColorStop(0.5, "#121c52"); g.addColorStop(1, "#090f2e");
+      g.addColorStop(0, "#132a78"); g.addColorStop(0.5, "#1d3da0"); g.addColorStop(1, "#102263");
       ctx.fillStyle = g;
       ctx.beginPath();
       ctx.moveTo(x + crop, y); ctx.lineTo(x + cw - crop, y); ctx.lineTo(x + cw, y + crop); ctx.lineTo(x + cw, y + ch - crop);
@@ -139,11 +141,11 @@ const foilMap = (): THREE.DataTexture => (foil ??= foilNormalMap());
 const std = (p: THREE.MeshStandardMaterialParameters): THREE.MeshStandardMaterial => new THREE.MeshStandardMaterial(p);
 
 export const M = {
-  goldFoil: () => shared("goldFoil", () => std({ color: 0xe0a236, metalness: 1, roughness: 0.27, normalMap: foilMap(), normalScale: new THREE.Vector2(1.1, 1.1), envMapIntensity: 1.35 })),
+  goldFoil: () => shared("goldFoil", () => std({ color: 0xd99a30, metalness: 1, roughness: 0.3, normalMap: foilMap(), normalScale: new THREE.Vector2(0.8, 0.8), envMapIntensity: 1.3 })),
   silverFoil: () => shared("silverFoil", () => std({ color: 0xd6dae2, metalness: 1, roughness: 0.2, normalMap: foilMap(), normalScale: new THREE.Vector2(0.9, 0.9), envMapIntensity: 1.3 })),
   blackFoil: () => shared("blackFoil", () => std({ color: 0x141416, metalness: 0.85, roughness: 0.34, normalMap: foilMap(), normalScale: new THREE.Vector2(0.8, 0.8) })),
-  cells: () => shared("cells", () => std({ map: solarCellMap(), metalness: 0.55, roughness: 0.16, emissive: 0x0a1238, emissiveIntensity: 0.35, envMapIntensity: 1.5 })),
-  carbon: () => shared("carbon", () => std({ color: 0x17171a, metalness: 0.25, roughness: 0.5 })),
+  cells: () => shared("cells", () => std({ map: solarCellMap(), metalness: 0.15, roughness: 0.24, emissive: 0x0b1a55, emissiveIntensity: 0.45, envMapIntensity: 1.1 })),
+  carbon: () => shared("carbon", () => std({ color: 0x2a2b30, metalness: 0.3, roughness: 0.45 })),
   aluminum: () => shared("aluminum", () => std({ color: 0xc8ccd2, metalness: 1, roughness: 0.4 })),
   darkMetal: () => shared("darkMetal", () => std({ color: 0x35373c, metalness: 1, roughness: 0.48 })),
   white: () => shared("white", () => std({ color: 0xcfcdc7, metalness: 0.02, roughness: 0.62 })),
@@ -164,7 +166,50 @@ const mesh = (geometry: THREE.BufferGeometry, material: THREE.Material, position
   if (rotation) m.rotation.set(...rotation);
   return m;
 };
-const box = (w: number, h: number, d: number): THREE.BoxGeometry => new THREE.BoxGeometry(w, h, d);
+// Machined parts have broken edges: a small bevel is what catches the light and reads as "real".
+const box = (w: number, h: number, d: number): THREE.BufferGeometry => new RoundedBoxGeometry(w, h, d, 2, Math.min(0.014, Math.min(w, h, d) * 0.14));
+
+/**
+ * Collapse a static part tree into one mesh per material (hundreds of draw calls become a
+ * dozen). Sub-trees flagged `userData.dynamic`, status lights and transparent effects are
+ * left as they are so they can still be animated.
+ */
+export function bake<T extends THREE.Object3D>(root: T): T {
+  root.updateMatrixWorld(true);
+  const toRoot = new THREE.Matrix4().copy(root.matrixWorld).invert();
+  const byMaterial = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  const merged: THREE.Mesh[] = [];
+  const visit = (o: THREE.Object3D): void => {
+    if (o !== root && o.userData.dynamic) return;
+    const m = o as THREE.Mesh;
+    if (m.isMesh && !Array.isArray(m.material) && !m.material.transparent && m.name !== "led" && !m.userData.baked) {
+      const g = m.geometry.clone().applyMatrix4(new THREE.Matrix4().multiplyMatrices(toRoot, m.matrixWorld));
+      for (const name of Object.keys(g.attributes)) if (name !== "position" && name !== "normal" && name !== "uv") g.deleteAttribute(name);
+      if (!g.index) g.setIndex(Array.from({ length: g.getAttribute("position").count }, (_, i) => i));
+      const list = byMaterial.get(m.material) ?? [];
+      list.push(g);
+      byMaterial.set(m.material, list);
+      merged.push(m);
+    }
+    for (const child of [...o.children]) visit(child);
+  };
+  visit(root);
+  for (const m of merged) {
+    m.parent?.remove(m);
+    m.geometry.dispose();
+  }
+  for (const [material, geometries] of byMaterial) {
+    const geometry = mergeGeometries(geometries, false);
+    for (const g of geometries) g.dispose();
+    if (!geometry) continue;
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.userData.baked = true;
+    root.add(mesh);
+  }
+  return root;
+}
 const cyl = (rTop: number, rBottom: number, h: number, segments = 24, open = false): THREE.CylinderGeometry => new THREE.CylinderGeometry(rTop, rBottom, h, segments, 1, open);
 const HALF = Math.PI / 2;
 
@@ -237,9 +282,8 @@ export function buildSolarWing(areaM2: number): THREE.Group {
     wing.add(panel);
     panels.push(panel);
   }
-  wing.userData.panels = panels;
   wing.userData.length = yoke + count * (w + 0.012);
-  return wing;
+  return bake(wing);
 }
 
 /** High-gain antenna on a two-axis gimbal. Mount at the origin, boresight +Y. */
@@ -506,7 +550,6 @@ export function buildSpacecraft(spacecraft: { busDryMassKg: number; components: 
       drive.add(wing);
       group.add(drive);
       wings.push(drive);
-      panels.push(...(wing.userData.panels as THREE.Group[]));
       radius = Math.max(radius, size.x / 2 + (wing.userData.length as number) * 1.05);
     }
   }
@@ -544,6 +587,8 @@ export function buildSpacecraft(spacecraft: { busDryMassKg: number; components: 
     radius = Math.max(radius, size.z / 2 + (reach.max.z - reach.min.z) * model.scale.z);
   });
 
+  for (const drive of wings) drive.userData.dynamic = true;
+  bake(group);
   const leds: THREE.Mesh[] = [];
   group.traverse((o) => {
     if (o.name === "led") leds.push(o as THREE.Mesh);
@@ -574,7 +619,7 @@ export function buildComponent(c: any): THREE.Group {
   if (c.type !== "solar_panel") model.position.x -= (bounds.min.x + bounds.max.x) / 2;
   holder.userData.height = bounds.max.y - bounds.min.y;
   holder.userData.radius = Math.max(bounds.max.x - bounds.min.x, bounds.max.z - bounds.min.z) / 2;
-  return holder;
+  return bake(holder);
 }
 
 /** Surface rover: rocker-bogie chassis, grousered wheels, deck array and a camera mast. */
@@ -614,5 +659,5 @@ export function buildRover(rover: { wheelCount: number; wheelRadiusM: number; su
   const dish = buildDish(r * 2.2);
   dish.position.set(-length * 0.28, deckY + r * 0.58, -half * 0.3);
   g.add(dish);
-  return g;
+  return bake(g);
 }

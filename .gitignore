@@ -10,3 +10,10 @@ apps/web/out/
 apps/web/next-env.d.ts
 *.tsbuildinfo
 !.env.example
+
+# overnight run state (local)
+.claude/nightshift-hook.json
+NIGHTSHIFT_STOP
+.claude/
+reports/evidence/ui/_pdf/
+reports/*.html

@@ -1,4 +1,5 @@
 /** Platform integration: science additions, scenarios, auth, audit, sessions, real-time collaboration, game flow, durability, knowledge. */
+import { installPart } from "../src/systems/graph.js";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
@@ -88,7 +89,9 @@ describe("GMAT interface", () => {
 describe("scenarios, simulation and scoring", () => {
   it("generates a valid, internally consistent mission for every scenario and difficulty", () => {
     for (const scenario of SCENARIOS) {
-      expect(scenario.objectives.reduce((s, o) => s + o.weight, 0), scenario.id).toBe(100);
+      // 100 points of mission objectives, plus flight resilience (8) and schedule (6); scores are normalised to the total.
+      expect(scenario.objectives.reduce((s, o) => s + o.weight, 0), scenario.id).toBe(114);
+      expect(scenario.stretchGoals.length, scenario.id).toBeGreaterThanOrEqual(2);
       for (const difficulty of ["cadet", "engineer", "chief"] as const) {
         for (const seed of [1, 2, 3, 99]) {
           const m = generateMission(scenario.id, seed, difficulty);
@@ -139,7 +142,10 @@ describe("scenarios, simulation and scoring", () => {
     expect(score(m.config, false).objectives.find((o) => o.id === "survive")!.feedback).toMatch(/run the mission simulation/);
 
     const ns = SCENARIOS[0]!.catalog.find((c) => c.id === "ns")!.component;
-    const better = { ...m.config, spacecraft: { ...m.config.spacecraft, components: [...m.config.spacecraft.components, { ...ns, id: "inst1" } as never] } };
+    // On board but not connected, an instrument measures nothing: it has to be wired to count.
+    const loose = { ...m.config, spacecraft: { ...m.config.spacecraft, components: [...m.config.spacecraft.components, { ...ns, id: "inst1" } as never] } };
+    expect(score(loose).objectives.find((o) => o.id === "hydrogen")!.achieved).toBe(0);
+    const better = installPart(m.config, { ...ns, id: "inst1" } as never);
     const improved = score(better);
     expect(improved.objectives.find((o) => o.id === "hydrogen")!.achieved).toBe(1);
     expect(improved.objectives.find((o) => o.id === "footprint")!.achieved).toBeGreaterThan(0); // 150 km footprint at 100 km altitude: partial
@@ -332,7 +338,8 @@ describe("platform server", () => {
     sessionId = created.body.session.id;
     expect(created.body.mission.version).toBe(1);
     expect(created.body.inviteCode).toMatch(/^[0-9A-F]{6}$/);
-    expect(created.body.evaluation.objectives).toHaveLength(12);
+    expect(created.body.evaluation.objectives).toHaveLength(14);
+    expect(created.body.game.charter).toBeNull(); // the team has not defined its mission yet
     expect(created.body.scenario.catalog.length).toBeGreaterThan(10);
 
     expect((await flight.api("GET", `/api/sessions/${sessionId}`)).status).toBe(403); // not a member yet
@@ -341,6 +348,10 @@ describe("platform server", () => {
       const joined = await client.api("POST", `/api/sessions/${sessionId}/join`, { inviteCode: created.body.inviteCode, discipline });
       expect(joined.body.member).toMatchObject({ role: "engineer", discipline });
     }
+    // The challenge is played by up to four: a fifth participant is turned away.
+    const fifth = await outsider.api("POST", `/api/sessions/${sessionId}/join`, { inviteCode: created.body.inviteCode });
+    expect(fifth.status).toBe(409);
+    expect(fifth.body.error).toMatch(/full \(4 participants\)/);
     const view = await flight.api("GET", `/api/sessions/${sessionId}`);
     expect(view.body.session.members).toHaveLength(4);
     expect(view.body.inviteCode).toBeUndefined(); // only the lead sees the code
@@ -453,7 +464,17 @@ describe("platform server", () => {
     expect(glb.status).toBe(200);
     expect(glb.headers.get("cache-control")).toMatch(/immutable/); // content-addressed, versioned by mission version
     expect(Buffer.from(await glb.arrayBuffer()).subarray(0, 4).toString()).toBe("glTF");
-    expect(version.evaluation.objectives.find((o: { id: string }) => o.id === "hydrogen").achieved).toBe(1);
+    // On board but not yet wired, the instrument measures nothing; the wiring check says which line is missing.
+    expect(version.evaluation.objectives.find((o: { id: string }) => o.id === "hydrogen").achieved).toBe(0);
+    expect(version.checks.find((c: { id: string }) => c.id === "systems.wiring")).toMatchObject({ status: "warn", detail: expect.stringMatching(/No power line/) });
+    // Connecting it runs its power, data and control lines to the bus, through the same pipeline.
+    const wired = await power.api("POST", `/api/sessions/${sessionId}/connect`, { componentId: "inst1", wait: true });
+    expect(wired.status).toBe(202);
+    const connected = await socket.until((m) => m.type === "mission.version" && m.mission.config.systems.links.some((l: { from: { node: string } }) => l.from.node === "inst1"), "wired instrument");
+    expect(connected.mission.config.systems.links.filter((l: { from: { node: string }; to: { node: string } }) => l.from.node === "inst1" || l.to.node === "inst1").map((l: { kind: string }) => l.kind).sort()).toEqual(["control", "data", "power"]);
+    expect(connected.evaluation.objectives.find((o: { id: string }) => o.id === "hydrogen").achieved).toBe(1);
+    expect(connected.mission.derived["systems.wiring"].value.parts.find((p: { id: string }) => p.id === "inst1")).toMatchObject({ power: 1, data: 1, commandable: true, notes: [] });
+    expect((await power.api("POST", `/api/sessions/${sessionId}/connect`, { componentId: "inst1" })).status).toBe(409); // nothing left to connect
     const proposals = await power.api("GET", `/api/sessions/${sessionId}/proposals`);
     expect(proposals.body[0]).toMatchObject({ status: "published", decision: { by: { id: "policy:open" } } });
 
@@ -480,8 +501,23 @@ describe("platform server", () => {
     socket.ws.close();
   }, 30000);
 
+  let sharedDesignId = "";
   it("plays the mission through trade studies, simulation, review, phase gates, submission and the leaderboard", async () => {
     const s = `/api/sessions/${sessionId}`;
+    // The team defines its mission first: nothing advances, and nothing is submitted, before that.
+    const undefinedYet = await lead.api("POST", `${s}/phase`);
+    expect(undefinedYet.status).toBe(409);
+    expect(undefinedYet.body.error).toMatch(/Define your mission first/);
+    expect((await lead.api("POST", `${s}/submit`)).body.error).toMatch(/Define your mission before submitting/);
+    expect((await flight.api("POST", `${s}/define`, { statement: "too short", primary: "hydrogen" })).status).toBe(400);
+    expect((await flight.api("POST", `${s}/define`, { statement: "Map hydrogen at the south pole well enough to pick a rover route.", primary: "cost" })).status).toBe(400); // not a science objective
+    const defined = await flight.api("POST", `${s}/define`, { statement: "Map hydrogen at the south pole well enough to pick a rover route.", primary: "hydrogen", stretch: ["s-thermal", "no-such-goal"] });
+    expect(defined.status).toBe(200);
+    expect(defined.body.charter).toMatchObject({ primary: "hydrogen", stretch: ["s-thermal"], by: flight.account.id });
+    const shaped = (await lead.api("GET", s)).body.evaluation.objectives as { id: string; weight: number; primary?: boolean; stretch?: boolean }[];
+    expect(shaped).toHaveLength(15);
+    expect(shaped.find((o) => o.id === "hydrogen")).toMatchObject({ weight: 21, primary: true });
+    expect(shaped.find((o) => o.id === "s-thermal")).toMatchObject({ stretch: true });
     expect((await lead.api("POST", `${s}/phase`)).status).toBe(200); // concept → trade needs CML 2: the design is viable
     const gate = await lead.api("POST", `${s}/phase`); // trade → design needs CML 3: trade studies
     expect(gate.status).toBe(409);
@@ -499,6 +535,32 @@ describe("platform server", () => {
     const sim = await power.api("POST", `${s}/simulate`);
     expect(sim.body.days).toBe(365);
     expect(sim.body.kpis.totalDataReturnedGb).toBeGreaterThan(0);
+    // The flight meets the events drawn from the mission seed (one on the easiest setting), the same on every run.
+    expect(sim.body.flightEvents).toHaveLength(1);
+    expect(sim.body.flightEvents[0].outcome).toMatch(/science data/);
+    expect((await power.api("POST", `${s}/simulate`)).body.flightEvents).toEqual(sim.body.flightEvents);
+
+    // Save, share and compare designs.
+    const saved = await power.api("POST", `${s}/designs`, { name: "First closed design" });
+    expect(saved.status).toBe(201);
+    const shared = await power.api("POST", `${s}/designs/share`, { name: "Artemis baseline" });
+    expect(shared.status).toBe(201);
+    expect(shared.body).toMatchObject({ name: "Artemis baseline", by: "POWER", scenarioId: "lunar-volatiles" });
+    expect(shared.body.config).toBeUndefined();
+    sharedDesignId = shared.body.id as string;
+    const listed = await comms.api("GET", `${s}/designs`);
+    expect(listed.body.saved).toHaveLength(1);
+    expect(listed.body.shared.map((d: { id: string }) => d.id)).toContain(sharedDesignId);
+    const compared = await comms.api("GET", `${s}/compare?a=1&b=head`);
+    expect(compared.status).toBe(200);
+    expect(compared.body.a.label).toBe("v1");
+    expect(compared.body.b.label).toMatch(/First closed design · v\d+ \(current\)/);
+    const massRow = compared.body.rows.find((r: { key: string }) => r.key === "totalMassKg");
+    expect(massRow.b).toBeGreaterThan(massRow.a); // parts were added since v1
+    expect(massRow.better).toBe("a");
+    expect(compared.body.parts.onlyB.length).toBeGreaterThan(0);
+    expect((await comms.api("GET", `${s}/compare?a=head&b=shared:${sharedDesignId}`)).body.b.label).toBe("Artemis baseline · POWER");
+    expect((await outsider.api("GET", `${s}/compare?a=1&b=head`)).status).toBe(403);
     for (const risk of ["Mascon perturbations lower periapsis", "Eclipse season deeper than modelled", "Single ground station outage"]) {
       await flight.api("POST", `${s}/notes`, { kind: "mission_problem", summary: risk, mitigation: "Carry margin and re-plan" });
     }
@@ -508,12 +570,20 @@ describe("platform server", () => {
     expect(review.body.maturity.level).toBeGreaterThanOrEqual(4);
     expect((await lead.api("POST", `${s}/phase`)).body.game.phase).toBe("review");
 
+    // A mission with no way to space cannot be submitted.
+    const grounded = await lead.api("POST", `${s}/submit`);
+    expect(grounded.status).toBe(409);
+    expect(grounded.body.error).toMatch(/Choose a launch vehicle/);
+    const headNow = (await lead.api("GET", s)).body.mission.version as number;
+    expect((await lead.api("POST", `${s}/edit`, { baseVersion: headNow, patches: [{ op: "set", path: "meta.launchVehicleId", value: "dedicated" }] })).status).toBe(200);
     const submitted = await lead.api("POST", `${s}/submit`);
     expect(submitted.status).toBe(200);
     expect(submitted.body.evaluation.simulated).toBe(true);
     expect(submitted.body.evaluation.rigor.find((r: { item: string }) => r.item === "Collaboration").earned).toBe(3);
     expect(submitted.body.submission).toMatchObject({ scenarioId: "lunar-volatiles", difficulty: "cadet", cml: 5 });
     expect(submitted.body.submission.team).toHaveLength(4);
+    expect(submitted.body.standing).toMatchObject({ rank: 1, of: 1, scope: "scenario" });
+    expect(submitted.body.evaluation.objectives.find((o: { id: string }) => o.id === "resilience").value).toBeGreaterThan(0);
 
     // Frozen after submission.
     expect((await flight.api("POST", `${s}/edit`, { baseVersion: 99, patches: [{ op: "set", path: "orbit.inclinationDeg", value: 60 }] })).body.reason).toBe("frozen");
@@ -553,6 +623,106 @@ describe("platform server", () => {
       rmSync(docs, { recursive: true, force: true });
     }
   });
+  it("hands the crew a problem with its kit, lets each take a role, and has the AI reply to what they try", async () => {
+    const created = await lead.api("POST", "/api/sessions", { scenarioId: "leo-cubesat", name: "Kit crew", seed: 5, difficulty: "cadet" });
+    const s = `/api/sessions/${created.body.session.id}`;
+    // The kit is built with the mission: controls, parts and roles, all things the engineering models understand.
+    const kit = created.body.session.kit as { crux: string; levers: { key: string; why: string }[]; toolbox: { itemId: string }[]; roles: { seat: string }[]; challenge: string };
+    expect(kit.crux.length).toBeGreaterThan(10);
+    expect(kit.levers.length).toBeGreaterThanOrEqual(3);
+    const catalogue = new Set((created.body.scenario.catalog as { id: string }[]).map((c) => c.id));
+    expect(kit.toolbox.length).toBeGreaterThanOrEqual(2);
+    expect(kit.toolbox.every((t) => catalogue.has(t.itemId))).toBe(true);
+    expect(kit.roles.length).toBeGreaterThanOrEqual(2);
+
+    // Roles: one per crew member, one crew member per role.
+    await flight.api("POST", `${s}/join`, {});
+    const seat = kit.roles[0]!.seat;
+    expect((await lead.api("POST", `${s}/role`, { seat })).body.roleClaims).toEqual({ [seat]: lead.account.id });
+    const taken = await flight.api("POST", `${s}/role`, { seat });
+    expect(taken.status).toBe(409);
+    expect((await flight.api("POST", `${s}/role`, { seat: kit.roles[1]!.seat })).status).toBe(200);
+    expect((await lead.api("POST", `${s}/role`, { seat: "No such role" })).status).toBe(400);
+
+    // Turning time: the same design, asked about at another moment. Nothing is published.
+    const now = await lead.api("GET", `${s}/at?time=2027-06-20T00:00:00Z`);
+    const later = await lead.api("GET", `${s}/at?time=2027-09-20T00:00:00Z`);
+    expect(now.status).toBe(200);
+    expect(typeof now.body.powerMarginW).toBe("number");
+    expect(later.body.betaDeg).not.toBe(now.body.betaDeg);
+    expect((await lead.api("GET", s)).body.mission.version).toBe(1);
+    expect((await lead.api("GET", `${s}/at?time=nonsense`)).status).toBe(400);
+
+    // A question gets an answer in words, with the results it rests on.
+    const asked = await flight.api("POST", `${s}/requests`, { text: "Compute the link budget", wait: true });
+    expect(asked.body.status).toBe("completed");
+    expect(asked.body.answer).toMatchObject({ verdict: "answer", wording: "template" }); // no model configured here
+    expect(asked.body.answer.facts.length).toBeGreaterThan(0);
+    expect(asked.body.answer.facts[0].source).toBe("science.comms.link_budget");
+
+    // An idea that breaks a limit is built and measured, and then it is the crew's call.
+    const heavy = await flight.api("POST", `${s}/requests`, { text: "Add a 12 m2 solar panel", wait: true });
+    expect(heavy.body.status).toBe("awaiting_approval");
+    expect(heavy.body.answer.verdict).toBe("built_breaks_limit");
+    expect(heavy.body.answer.text).toMatch(/does not pass/);
+    const plain = await lead.api("POST", `${s}/proposals/${heavy.body.proposalId}/approve`, { reason: "ok" });
+    expect(plain.status).toBe(409); // failing tests still block an ordinary approval
+    const accepted = await lead.api("POST", `${s}/proposals/${heavy.body.proposalId}/approve`, { reason: "we will fix the mass", acceptViolations: true });
+    expect(accepted.status).toBe(200);
+    expect((await lead.api("GET", s)).body.checks.some((c: { status: string }) => c.status === "fail")).toBe(true);
+  });
+
+  it("runs a sandbox: limits are adjustable, every part is available, shared designs load, nothing is ranked", async () => {
+    const created = await outsider.api("POST", "/api/sessions", { scenarioId: "lunar-volatiles", name: "Sandbox", seed: 3, mode: "sandbox" });
+    expect(created.status).toBe(201);
+    expect(created.body.session.mode).toBe("sandbox");
+    const s = `/api/sessions/${created.body.session.id}`;
+    const ids = created.body.scenario.catalog.map((c: { id: string }) => c.id);
+    expect(ids).toEqual(expect.arrayContaining(["ns", "cs-cam", "adcs-rw", "cs-obc"])); // both catalogues
+    // Programme limits are fixed in a ranked mission and free in a sandbox.
+    expect((await lead.api("POST", `/api/sessions/${sessionId}/edit`, { baseVersion: 1, patches: [{ op: "set", path: "meta.scheduleMonths", value: 99 }] })).status).not.toBe(200);
+    const budget = await outsider.api("POST", `${s}/edit`, { baseVersion: 1, patches: [{ op: "set", path: "meta.budgetMusd", value: 900 }, { op: "set", path: "meta.massLimitKg", value: 400 }] });
+    expect(budget.status).toBe(200);
+    expect((await outsider.api("POST", `${s}/edit`, { baseVersion: 2, patches: [{ op: "set", path: "centralBody", value: "mars" }] })).status).toBe(403);
+    // Load the design the other crew shared.
+    const loaded = await outsider.api("POST", `${s}/designs/import`, { designId: sharedDesignId });
+    expect(loaded.status).toBe(200);
+    const after = (await outsider.api("GET", s)).body;
+    expect(after.mission.config.meta.budgetMusd).toBe(900);
+    expect(after.mission.config.spacecraft.components.some((c: { type: string }) => c.type === "instrument")).toBe(true);
+    expect((await outsider.api("POST", `${s}/designs/import`, { designId: "dsn_missing" })).status).toBe(404);
+    // No gates, no ranking.
+    expect((await outsider.api("POST", `${s}/phase`)).status).toBe(200);
+    const submit = await outsider.api("POST", `${s}/submit`);
+    expect(submit.status).toBe(409);
+    expect(submit.body.error).toMatch(/not ranked/);
+  });
+
+  it("ranks crews that flew the same brief against each other", async () => {
+    const briefs = await lead.api("POST", "/api/briefs/generate", { count: 1 });
+    const brief = briefs.body.briefs[0] as { id: string; title: string; template: string };
+    const scores: number[] = [];
+    for (const client of [lead, flight]) {
+      const created = await client.api("POST", "/api/sessions", { scenarioId: brief.template, briefId: brief.id, difficulty: "cadet" });
+      const s = `/api/sessions/${created.body.session.id}`;
+      const science = (created.body.scenario.objectives as { id: string; category: string }[]).find((o) => o.category === "science")!;
+      expect((await client.api("POST", `${s}/define`, { statement: `Fly "${brief.title}" and return its science.`, primary: science.id })).status).toBe(200);
+      // Two crews, two answers to the same problem: one flies the cheapest launch, the other the costliest.
+      expect((await client.api("POST", `${s}/edit`, { baseVersion: 1, patches: [{ op: "set", path: "meta.launchVehicleId", value: client === flight ? "heavy" : "dedicated" }] })).status).toBe(200);
+      const submitted = await client.api("POST", `${s}/submit`);
+      expect(submitted.status, JSON.stringify(submitted.body.error)).toBe(200);
+      expect(submitted.body.submission).toMatchObject({ briefId: brief.id, briefTitle: brief.title });
+      expect(submitted.body.standing).toMatchObject({ scope: "brief", of: scores.length + 1 });
+      scores.push(submitted.body.submission.score);
+    }
+    const board = await (await fetch(`${base}/api/leaderboard?brief=${brief.id}`)).json() as { rank: number; score: number; briefId: string }[];
+    expect(board).toHaveLength(2);
+    expect(board.every((b) => b.briefId === brief.id)).toBe(true);
+    expect(board[0]!.score).toBe(Math.max(...scores));
+    const listed = await (await fetch(`${base}/api/briefs`)).json() as { briefs: { id: string; crews: number; best: number }[] };
+    expect(listed.briefs.find((b) => b.id === brief.id)).toMatchObject({ crews: 2, best: Math.max(...scores) });
+  });
+
 });
 
 describe("durability", () => {

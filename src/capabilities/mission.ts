@@ -2,6 +2,7 @@
  * Mission-state capabilities: inspect the shared state and stage changes in the request's
  * draft workspace. None of these can modify the published mission directly.
  */
+import { standardLinks } from "../systems/graph.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { applyPatches, getPath, type PatchOp, pathsOverlap } from "../core/paths.js";
@@ -114,8 +115,10 @@ export function missionCapabilities(deps: { memory: ResearchMemory }): Capabilit
         component: ComponentSchema,
         assetId: z.string().optional(),
         sceneNode: SceneNodeSchema.partial().optional(),
+        /** Also run the part's standard power, data and control lines to the bus. */
+        connect: z.boolean().default(false),
       }),
-      output: z.object({ componentId: z.string(), sceneNodeId: z.string().nullable(), target: z.string() }),
+      output: z.object({ componentId: z.string(), sceneNodeId: z.string().nullable(), target: z.string(), lines: z.array(z.string()) }),
       requiredPermissions: ["state:propose"],
       constraints: { effect: "draft_write", idempotent: false },
       verification: { status: "self_tested", method: "Pipeline integration tests" },
@@ -133,10 +136,15 @@ export function missionCapabilities(deps: { memory: ResearchMemory }): Capabilit
             value: { name: input.component.name, ...input.sceneNode, id: sceneNodeId, assetId: input.assetId, componentId: input.component.id },
           });
         }
+        // Lines are sized for the part as it is being added; a wired mission needs them for the part to do anything.
+        const lines = input.connect && input.target === "spacecraft" && config.systems?.wired
+          ? standardLinks({ ...config, spacecraft: { ...config.spacecraft, components: [...config.spacecraft.components, input.component] } }, input.component.id)
+          : [];
+        for (const line of lines) patches.push({ op: "append", path: "systems.links", value: line });
         proposeValidated(ctx, patches);
-        return { output: { componentId: input.component.id, sceneNodeId, target: input.target } };
+        return { output: { componentId: input.component.id, sceneNodeId, target: input.target, lines: lines.map((l) => `${l.kind} ${l.from.node}.${l.from.port} → ${l.to.node}.${l.to.port}${l.rating ? ` (${l.rating} ${l.kind === "power" ? "W" : "bit/s"})` : ""}`) } };
       },
-      defaultInput: ({ params }) => ({ target: params.target ?? "spacecraft", component: params.component, assetId: params.assetId }),
+      defaultInput: ({ params }) => ({ target: params.target ?? "spacecraft", component: params.component, assetId: params.assetId, connect: params.connect === true }),
     }),
     defineCapability({
       id: "mission.attach_script",

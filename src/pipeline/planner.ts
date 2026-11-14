@@ -297,7 +297,7 @@ function recipe(op: Operation): Step[] | null {
         need: "state.add_component",
         why: op.description,
         dependsOn: withAsset ? ["inspect", "asset"] : ["inspect"],
-        input: { target: p.target ?? "spacecraft", component, ...(withAsset ? { assetId: ref("asset", "assetId") } : {}) },
+        input: { target: p.target ?? "spacecraft", component, connect: p.connect === true, ...(withAsset ? { assetId: ref("asset", "assetId") } : {}) },
         expectedOutputs: ["componentId", "sceneNodeId"],
       });
       return steps;

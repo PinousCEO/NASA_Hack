@@ -31,6 +31,9 @@ for (const d of all.filter((c) => !platform.registry.isUsable(c))) {
   console.log(`  - ${d.id}: ${d.developmentStatus === "planned" ? "planned" : "unavailable"} (${d.availability.reason ?? "no reason"})`);
 }
 const llm = platform.llm.status();
+// New mission briefs every day: top up at start-up and every few hours while the server runs.
+void platform.briefs.ensureDaily(6).then(() => console.log(`Mission briefs: ${JSON.stringify(platform.briefs.status())}`));
+setInterval(() => void platform.briefs.ensureDaily(6), 3 * 3600 * 1000).unref();
 console.log(llm.available ? `Language model: ${platform.llm.modelId}` : `Language model unavailable — using the rule-based analyser. ${llm.reason}`);
 const chain = platform.audit.verify();
 console.log(chain.ok ? `Audit log: ${chain.entries} entr${chain.entries === 1 ? "y" : "ies"}, chain intact` : `AUDIT LOG CHAIN BROKEN at entry ${chain.brokenAt}`);

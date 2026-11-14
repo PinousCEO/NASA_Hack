@@ -33,27 +33,36 @@ export default function Backdrop({ body = "moon", variant = "ambient" }: { body?
     let cleanup = (): void => {};
     void (async () => {
       const THREE = await import("three");
-      const { createPlanet, createSky, createFlowTube, createSun, createEnvironment, forceQuality } = await import("@/lib/scene/space");
+      const { createPlanet, createSky, createFlowTube, createSun, createEnvironmentAsync, forceQuality } = await import("@/lib/scene/space");
       const { buildSpacecraft } = await import("@/lib/scene/models");
-      const { createFx, gradeRenderer, softwareGl } = await import("@/lib/scene/fx");
+      const { compileAsyncOf, createFx, gradeRenderer, softwareGl } = await import("@/lib/scene/fx");
       const host = ref.current;
       if (stop || !host) return;
       let renderer: InstanceType<typeof THREE.WebGLRenderer>;
       try {
-        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });
+        // Keep the last picture in the canvas: if a frame is ever presented without a draw, the scene stays up instead of blinking to black.
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance", preserveDrawingBuffer: true });
       } catch {
         return; // no WebGL: the CSS backdrop remains
       }
       const hero = variant === "hero";
       const slow = softwareGl(renderer);
       if (slow) forceQuality("low");
-      renderer.setPixelRatio(slow ? 0.5 : Math.min(window.devicePixelRatio, 2));
+      renderer.setPixelRatio(slow ? 0.5 : Math.min(window.devicePixelRatio, 1.5));
+      renderer.shadowMap.enabled = !slow;
+      renderer.shadowMap.type = THREE.PCFShadowMap;
       gradeRenderer(renderer);
       host.appendChild(renderer.domElement);
+      // A canvas whose context is going away (page change, context loss) can show as a blank rectangle for a frame: hide it instead.
+      const hideCanvas = (): void => { renderer.domElement.style.visibility = "hidden"; };
+      const showCanvas = (): void => { renderer.domElement.style.visibility = ""; };
+      window.addEventListener("pagehide", hideCanvas);
+      renderer.domElement.addEventListener("webglcontextlost", hideCanvas);
+      renderer.domElement.addEventListener("webglcontextrestored", showCanvas);
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(0x000000);
       const camera = new THREE.PerspectiveCamera(hero ? 34 : 40, 1, 0.05, 3000);
-      const sky = createSky();
+      const sky = createSky({ renderer });
       scene.add(sky.object);
 
       const sunDir = new THREE.Vector3(-0.72, 0.34, 0.6).normalize();
@@ -62,10 +71,16 @@ export default function Backdrop({ body = "moon", variant = "ambient" }: { body?
       sun.scale.setScalar(hero ? 15 : 10);
       scene.add(sun);
       const key = new THREE.DirectionalLight(0xfff4e6, 3.6);
-      key.position.copy(sunDir).multiplyScalar(20);
-      scene.add(key, new THREE.HemisphereLight(0x8fa6d6, 0x1a1410, 0.2));
+      key.castShadow = !slow;
+      key.shadow.mapSize.set(1024, 1024);
+      key.shadow.bias = -0.0004;
+      key.shadow.normalBias = 0.002;
+      Object.assign(key.shadow.camera, { left: -0.45, right: 0.45, top: 0.45, bottom: -0.45, near: 10, far: 30 });
+      key.shadow.camera.updateProjectionMatrix();
+      scene.add(key, key.target, new THREE.HemisphereLight(0x8fa6d6, 0x1a1410, 0.2));
       try {
-        scene.environment = createEnvironment(renderer);
+        scene.environment = await createEnvironmentAsync(renderer);
+        if (stop) return;
         scene.environmentIntensity = 0.9;
         scene.environmentRotation.setFromQuaternion(new THREE.Quaternion().setFromUnitVectors(sunDir, new THREE.Vector3(1, 0, 0)));
       } catch { /* direct light only */ }
@@ -149,6 +164,10 @@ export default function Backdrop({ body = "moon", variant = "ambient" }: { body?
       resize();
       onScroll();
 
+      // Parallel shader compilation where the browser supports it: the page stays responsive while programs link.
+      if (fx) await fx.warm();
+      else await compileAsyncOf(renderer)?.(scene, camera)?.catch(() => undefined);
+      if (stop) return;
       const clock = new THREE.Clock();
       const nadir = new THREE.Vector3(), velocity = new THREE.Vector3(), normal = new THREE.Vector3(), up = new THREE.Vector3(), sunBody = new THREE.Vector3();
       const basis = new THREE.Matrix4();
@@ -178,7 +197,9 @@ export default function Backdrop({ body = "moon", variant = "ambient" }: { body?
         orbit.material.uniforms.uHead!.value = phase;
         nadir.copy(holder.position).normalize().negate();
         velocity.subVectors(p1, p0).normalize();
-        normal.crossVectors(velocity, nadir).normalize();
+        normal.crossVectors(sunDir, nadir);
+        if (normal.lengthSq() < 1e-4) normal.crossVectors(velocity, nadir);
+        normal.normalize();
         up.crossVectors(nadir, normal).normalize();
         craft.group.quaternion.setFromRotationMatrix(basis.makeBasis(normal, up, nadir));
         sunBody.copy(sunDir).applyQuaternion(inverse.copy(craft.group.quaternion).invert());
@@ -187,6 +208,8 @@ export default function Backdrop({ body = "moon", variant = "ambient" }: { body?
           drive.rotation.x = track;
           drive.children[0]!.scale.x = 0.04 + 0.96 * settle;
         }
+        holder.getWorldPosition(key.target.position);
+        key.position.copy(key.target.position).addScaledVector(sunDir, 20);
         const blink = Math.sin(t * 4) > 0.2;
         for (const led of craft.leds) led.visible = blink;
 
@@ -205,6 +228,7 @@ export default function Backdrop({ body = "moon", variant = "ambient" }: { body?
       host.dataset.ready = "1";
       cleanup = () => {
         renderer.setAnimationLoop(null);
+        window.removeEventListener("pagehide", hideCanvas);
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("scroll", onScroll);
         window.removeEventListener("resize", resize);

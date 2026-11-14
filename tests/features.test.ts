@@ -347,6 +347,10 @@ describe("sessions: text-to-3D, trajectory overlays and scenario play-throughs",
       expect(before.mission.config.centralBody).toBe(scenario.destination);
       const sma = before.mission.config.orbit.semiMajorAxisKm as number;
       const inc = before.mission.config.orbit.inclinationDeg as number;
+      const science = (before.scenario.objectives as { id: string; category: string }[]).find((o) => o.category === "science")!;
+      expect((await lead.api("POST", `${s}/define`, { statement: `Fly ${scenario.title} and return its science data.`, primary: science.id })).status).toBe(200);
+      // A mission with no way to space cannot be submitted; this crew flies the largest vehicle.
+      expect((await lead.api("POST", `${s}/edit`, { baseVersion: before.mission.version, patches: [{ op: "set", path: "meta.launchVehicleId", value: "heavy" }] })).status).toBe(200);
       await lead.api("POST", `${s}/phase`);
       await lead.api("POST", `${s}/trade`, { path: "orbit.semiMajorAxisKm", values: [0.99, 1, 1.03].map((f) => sma * f), metrics: [{ node: "orbit.eclipse", field: "eclipseFraction" }, { node: "power.budget", field: "marginFraction" }] });
       await lead.api("POST", `${s}/trade`, { path: "orbit.inclinationDeg", values: [inc - 2, inc, inc + 1], metrics: [{ node: "science.return", field: "maxCoverageLatitudeDeg" }] });

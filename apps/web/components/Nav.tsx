@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { type Account, api, currentAccount } from "@/lib/api";
+import { go as navigate, type Account, api, currentAccount } from "@/lib/api";
 
 /** Top navigation shared by the non-workspace pages. */
 export default function Nav({ onAccount }: { onAccount?: (a: Account | null) => void }) {
@@ -14,7 +14,7 @@ export default function Nav({ onAccount }: { onAccount?: (a: Account | null) => 
   }, []);
   const signOut = async (): Promise<void> => {
     await api("POST", "/api/auth/logout", {});
-    window.location.href = "/";
+    navigate("/");
   };
   return (
     <nav className="nav container">

@@ -142,7 +142,7 @@ export function nasaCapabilities(deps: { knowledge: KnowledgeBase }): Capability
       verification: { status: "self_tested", method: "Consistency tests against the single-epoch models (tests/platform.test.ts)" },
       outputVerification: "deterministic_calculation",
       run: (input, ctx) => {
-        const sim = simulateMission(working(ctx), input.maxDays);
+        const sim = simulateMission(working(ctx), { maxDays: input.maxDays });
         return { output: { ...sim }, assumptions: sim.assumptions };
       },
     }),

@@ -33,7 +33,9 @@ export interface Account { id: string; username: string; displayName: string; ro
 export interface Member { accountId: string; displayName: string; role: "lead" | "engineer" | "viewer"; discipline: string | null }
 export interface Check { id: string; description: string; status: "pass" | "warn" | "fail"; detail: string }
 export interface ObjectiveResult { id: string; title: string; description: string; category: string; weight: number; value: number | null; unit: string; target: number; achieved: number; points: number; feedback: string }
-export interface Evaluation { score: number; grade: string; objectivesScore: number; rigorScore: number; penalties: { reason: string; points: number }[]; categories: Record<string, { earned: number; possible: number }>; objectives: ObjectiveResult[]; rigor: { item: string; earned: number; possible: number; detail: string }[]; strengths: string[]; improvements: string[]; simulated: boolean; basis: string }
+export interface MissionOutcome { verdict: "not_ready" | "ready_to_fly" | "success" | "partial" | "failed"; headline: string; conditions: { id: string; title: string; met: boolean | null; evidence: string }[]; rule: string }
+export interface Evaluation {
+  outcome?: MissionOutcome; score: number; grade: string; objectivesScore: number; rigorScore: number; penalties: { reason: string; points: number }[]; categories: Record<string, { earned: number; possible: number }>; objectives: ObjectiveResult[]; rigor: { item: string; earned: number; possible: number; detail: string }[]; strengths: string[]; improvements: string[]; simulated: boolean; basis: string }
 export interface Maturity { level: number; levelName: string; criteria: { level: number; id: string; description: string; met: boolean; evidence: string }[]; nextSteps: string[]; basis: string }
 export interface MissionVersion { version: number; config: any; derived: Record<string, { value: any; assumptions: string[]; verification: string; error?: string }>; recalculated: string[]; changedPaths?: string[]; publishedAt: string; publishedBy: string; note: string }
 export interface Presence { clientId: string; accountId: string; displayName: string; color: string; mode: "desktop" | "xr"; role?: string; discipline?: string | null; head?: number[] | null; hands?: { left: number[] | null; right: number[] | null }; focus?: string | null }
@@ -41,6 +43,7 @@ export interface Snapshot {
   session: any; mission: MissionVersion; checks: Check[]; game: any; maturity: Maturity; evaluation: Evaluation; locks: Record<string, string>;
   scenario: { id: string; title: string; tagline: string; briefing: string[]; scienceQuestions: string[]; references: string[]; catalog: any[]; disciplines: { id: string; name: string; description: string }[] };
   versions: any[]; you?: any; inviteCode?: string;
+  systemsGuide?: { ports: Record<string, { name: string; kind: string; dir: string; unit: string; label: string }[]>; signals: { name: string; unit: string; meaning: string }[]; targets: string[] };
 }
 
 export async function currentAccount(): Promise<Account | null> {
@@ -63,4 +66,14 @@ export function fmt(v: unknown, digits = 3): string {
   if (a >= 100) return v.toFixed(0);
   if (a >= 10) return v.toFixed(1);
   return Number(v.toPrecision(digits)).toString();
+}
+
+/**
+ * Change page. The screen is covered in black for one painted frame before the browser leaves,
+ * so a half-torn-down page (a 3D canvas that has already lost its picture) is never shown.
+ */
+export function go(url: string): void {
+  const viaShell = (window as unknown as { __go?: (u: string) => void }).__go;
+  if (viaShell) viaShell(url);
+  else window.location.assign(url);
 }

@@ -16,6 +16,7 @@ import type { PatchOp } from "../core/paths.js";
 import type { Account } from "../platform/auth.js";
 import type { Platform } from "../platform/platform.js";
 import type { MissionSession } from "../platform/sessions.js";
+import { redacted, visibleTo } from "../pipeline/privacy.js";
 
 const COLORS = ["#4cc9f0", "#f72585", "#ffd166", "#06d6a0", "#b388ff", "#ff8c42", "#90e0ef", "#e63946"];
 const MAX_MESSAGE_BYTES = 64 * 1024;
@@ -43,6 +44,8 @@ export class CollabHub {
   private readonly wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
   private readonly heartbeat: NodeJS.Timeout;
   private nextClient = 1;
+  /** The moment each mission's crew is looking at: shared so everyone sees the same sky. Not part of the design. */
+  private readonly clocks = new Map<string, { timeMs: number; rate: number; at: number; by: string }>();
 
   constructor(
     private readonly platform: Platform,
@@ -122,8 +125,14 @@ export class CollabHub {
     session.on("game", (game) => this.broadcast(session, { type: "game.updated", game, evaluation: session.evaluate(), maturity: session.maturity() }));
     session.on("members", (members) => this.broadcast(session, { type: "members.updated", members, presence: this.roster(session) }));
     session.on("locks", (locks) => this.broadcast(session, { type: "locks.updated", locks }));
-    session.on("request", (r) =>
-      this.broadcast(session, { type: "request.updated", request: { id: r.id, text: r.text, status: r.status, user: r.user, updatedAt: r.updatedAt, summary: r.requirement?.summary, feasibility: r.feasibility?.classification, tasks: r.plan?.tasks.map((t) => ({ id: t.id, capabilityId: t.executedBy ?? t.capabilityId, status: t.status })), proposalId: r.proposalId, error: r.error, traceLength: r.trace.length } }),
+    session.on("request", (r) => {
+      // The owner (and everyone, once shared) gets the conversation; the rest of the crew gets only what reached the shared world.
+      const full = JSON.stringify({ type: "request.updated", request: { id: r.id, text: r.text, status: r.status, user: r.user, createdAt: r.createdAt, updatedAt: r.updatedAt, shared: r.shared === true, summary: r.requirement?.summary, feasibility: r.feasibility?.classification, tasks: r.plan?.tasks.map((t) => ({ id: t.id, capabilityId: t.executedBy ?? t.capabilityId, status: t.status })), proposalId: r.proposalId, error: r.error, answer: r.answer, queuePosition: r.queuePosition, traceLength: r.trace.length } });
+      const stub = JSON.stringify({ type: "request.updated", request: redacted(r) });
+      for (const peer of this.peers) {
+        if (peer.session === session && peer.ws.readyState === WebSocket.OPEN) peer.ws.send(visibleTo(r, peer.account.id) ? full : stub);
+      }
+    },
     );
     session.on("proposal", (proposal) => this.broadcast(session, { type: "proposal.updated", proposal }));
   }
@@ -155,7 +164,7 @@ export class CollabHub {
       this.broadcast(session, { type: "presence.left", clientId: peer.clientId, presence: this.roster(session) });
     });
     ws.on("error", () => ws.terminate());
-    this.send(peer, { type: "welcome", you: { clientId: peer.clientId, accountId: account.id, color: peer.color, role: session.member(account.id)?.role }, ...session.snapshot(), presence: this.roster(session), resumed: false, missed: [] });
+    this.send(peer, { type: "welcome", you: { clientId: peer.clientId, accountId: account.id, color: peer.color, role: session.member(account.id)?.role }, ...session.snapshot(), clock: this.clocks.get(session.meta.id) ?? null, presence: this.roster(session), resumed: false, missed: [] });
     this.broadcast(session, { type: "presence.joined", presence: this.roster(session) }, peer);
   }
 
@@ -183,7 +192,7 @@ export class CollabHub {
         const last = typeof msg.lastVersion === "number" ? msg.lastVersion : 0;
         if (msg.mode === "xr" || msg.mode === "desktop") peer.mode = msg.mode;
         const missed = last > 0 ? session.store.list().filter((v) => v.version > last).map((v) => ({ version: v.version, by: session.member(v.publishedBy)?.displayName ?? v.publishedBy, note: v.note, changedPaths: v.changedPaths ?? [] })) : [];
-        this.send(peer, { type: "welcome", you: { clientId: peer.clientId, accountId: account.id, color: peer.color, role: session.member(account.id)?.role }, ...session.snapshot(), presence: this.roster(session), resumed: last > 0, missed });
+        this.send(peer, { type: "welcome", you: { clientId: peer.clientId, accountId: account.id, color: peer.color, role: session.member(account.id)?.role }, ...session.snapshot(), clock: this.clocks.get(session.meta.id) ?? null, presence: this.roster(session), resumed: last > 0, missed });
         this.broadcast(session, { type: "presence.joined", presence: this.roster(session) }, peer);
         return;
       }
@@ -218,6 +227,14 @@ export class CollabHub {
         if (msg.mode === "xr" || msg.mode === "desktop") peer.mode = msg.mode;
         peer.presence = { ...peer.presence, ...next };
         this.broadcast(session, { type: "presence.update", clientId: peer.clientId, accountId: account.id, color: peer.color, mode: peer.mode, displayName: account.displayName, ...peer.presence }, peer);
+        return;
+      }
+      case "clock": {
+        // Someone turned the world or changed how fast time runs: everyone's scene follows. Ephemeral, like presence.
+        if (typeof msg.timeMs !== "number" || !Number.isFinite(msg.timeMs) || typeof msg.rate !== "number" || !Number.isFinite(msg.rate) || Math.abs(msg.rate) > 1e8) return;
+        const clock = { timeMs: msg.timeMs, rate: msg.rate, at: Date.now(), by: account.displayName };
+        this.clocks.set(session.meta.id, clock);
+        this.broadcast(session, { type: "clock", ...clock, clientId: peer.clientId }, peer);
         return;
       }
       case "transform": {

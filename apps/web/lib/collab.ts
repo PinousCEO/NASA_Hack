@@ -24,6 +24,8 @@ export interface CollabEvents {
   proposal(proposal: any): void;
   members(members: any[]): void;
   transform(t: { clientId: string; nodeId: string; pose: number[]; color: string }): void;
+  /** A crewmate turned the world or changed how fast time runs. */
+  clock(c: { timeMs: number; rate: number; at: number; by: string }): void;
   status(status: "connecting" | "live" | "reconnecting" | "offline", detail?: string): void;
 }
 
@@ -104,6 +106,7 @@ export class Collab {
       case "request.updated": this.on.request?.(m.request); break;
       case "proposal.updated": this.on.proposal?.(m.proposal); break;
       case "transform.preview": this.on.transform?.(m); break;
+      case "clock": this.on.clock?.(m); break;
       case "edit.result": this.pending.get(m.clientSeq)?.(m); this.pending.delete(m.clientSeq); break;
       case "lock.result": this.lockWaiters.get(m.path)?.(m.granted); this.lockWaiters.delete(m.path); break;
       case "pong": this.latencyMs = performance.now() - m.t; break;
@@ -145,6 +148,11 @@ export class Collab {
     this.lastPresence = now;
     if (p.mode) this.mode = p.mode;
     this.send({ type: "presence", ...p });
+  }
+
+  /** Share the moment this crew is looking at, and how fast time is running. */
+  clock(timeMs: number, rate: number): void {
+    this.send({ type: "clock", timeMs, rate });
   }
 
   /** An object being dragged but not yet released: relayed for smooth motion, not saved. */

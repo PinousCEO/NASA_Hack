@@ -9,6 +9,8 @@ const fraction = z.number().min(0).max(1);
 const bodyId = z.enum(["earth", "moon", "mars"]);
 /** Cost in the platform's game cost model, millions of US dollars. Not a NASA cost estimate. */
 const costMusd = z.number().min(0).default(0);
+/** Months needed to build and deliver the part (game schedule model). Defaults by component type when omitted. */
+const leadTimeMonths = z.number().min(0).max(60).optional();
 
 export const SolarPanelSchema = z.object({
   id,
@@ -20,6 +22,7 @@ export const SolarPanelSchema = z.object({
   pointingLoss: fraction.default(0.1),
   degradationPerYear: fraction.default(0.02),
   costMusd,
+  leadTimeMonths,
 });
 
 export const BatterySchema = z.object({
@@ -30,6 +33,7 @@ export const BatterySchema = z.object({
   capacityWh: z.number().positive(),
   maxDepthOfDischarge: fraction.default(0.4),
   costMusd,
+  leadTimeMonths,
 });
 
 export const AntennaSchema = z.object({
@@ -49,6 +53,7 @@ export const AntennaSchema = z.object({
   otherLossesDb: z.number().min(0).default(3),
   requiredEbN0Db: z.number().default(9.6),
   costMusd,
+  leadTimeMonths,
 });
 
 export const LoadSchema = z.object({
@@ -59,6 +64,7 @@ export const LoadSchema = z.object({
   powerW: z.number().min(0),
   dutyCycle: fraction.default(1),
   costMusd,
+  leadTimeMonths,
 });
 
 export const INSTRUMENT_KINDS = ["camera", "spectrometer", "neutron_spectrometer", "radar", "magnetometer", "thermal_imager", "lidar"] as const;
@@ -78,9 +84,42 @@ export const InstrumentSchema = z.object({
   apertureM: z.number().positive().optional(),
   wavelengthUm: z.number().positive().optional(),
   costMusd,
+  leadTimeMonths,
 });
 
-export const ComponentSchema = z.discriminatedUnion("type", [SolarPanelSchema, BatterySchema, AntennaSchema, LoadSchema, InstrumentSchema]);
+/** Attitude determination and control: how accurately the spacecraft points, and how steadily it holds. */
+export const AdcsSchema = z.object({
+  id,
+  type: z.literal("adcs"),
+  name: z.string(),
+  massKg: z.number().min(0),
+  powerW: z.number().min(0),
+  dutyCycle: fraction.default(1),
+  /** Absolute pointing error, degrees (drives high-gain antenna pointing loss). */
+  pointingAccuracyDeg: z.number().positive().max(10),
+  /** Pointing stability during an exposure, arcseconds (drives image smear). */
+  stabilityArcsec: z.number().positive().max(3600),
+  costMusd,
+  leadTimeMonths,
+});
+
+/** Onboard computer and data handling: storage, and compression before downlink. */
+export const ComputerSchema = z.object({
+  id,
+  type: z.literal("computer"),
+  name: z.string(),
+  massKg: z.number().min(0),
+  powerW: z.number().min(0),
+  dutyCycle: fraction.default(1),
+  /** Science data storage this unit adds, gigabits. */
+  storageGb: z.number().min(0).default(0),
+  /** Onboard compression: raw bits per downlinked bit. */
+  compressionRatio: z.number().min(1).max(20).default(1),
+  costMusd,
+  leadTimeMonths,
+});
+
+export const ComponentSchema = z.discriminatedUnion("type", [SolarPanelSchema, BatterySchema, AntennaSchema, LoadSchema, InstrumentSchema, AdcsSchema, ComputerSchema]);
 export type Component = z.infer<typeof ComponentSchema>;
 
 const uniqueIds = (items: { id: string }[]): boolean => new Set(items.map((i) => i.id)).size === items.length;
@@ -157,6 +196,51 @@ export const ScriptRecordSchema = z.object({
 });
 export type ScriptRecord = z.infer<typeof ScriptRecordSchema>;
 
+/** A wire between two ports. Power lines carry watts, data lines bits per second, control lines commands. */
+export const LinkSchema = z.object({
+  id,
+  kind: z.enum(["power", "data", "control"]),
+  /** "bus" is the spacecraft bus (power distribution, onboard storage, flight computer); anything else is a component id. */
+  from: z.object({ node: z.string().max(64), port: z.string().max(32) }),
+  to: z.object({ node: z.string().max(64), port: z.string().max(32) }),
+  /** What the line is rated to carry: W for power, bit/s for data. Control lines have no rating. */
+  rating: z.number().positive().optional(),
+  lengthM: z.number().positive().max(50).default(1.5),
+});
+export type Link = z.infer<typeof LinkSchema>;
+
+/** One rule of a controller: when the condition holds, each action sets a commanded value. */
+export const ControlRuleSchema = z.object({
+  when: z.string().min(1).max(240),
+  do: z.array(z.object({ target: z.string().min(1).max(80), value: z.string().min(1).max(160) })).min(1).max(8),
+  note: z.string().max(200).optional(),
+});
+
+/** Control logic that runs on board, once per simulated day, in the flight simulation. */
+export const ControllerSchema = z.object({
+  id,
+  name: z.string().max(80),
+  description: z.string().max(600).default(""),
+  /** Where it runs: "bus" (the flight computer) or the id of an onboard computer. */
+  hostId: z.string().max(64).default("bus"),
+  enabled: z.boolean().default(true),
+  /** Named numbers the controller remembers between days, with their starting values. */
+  memory: z.record(z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]{0,31}$/), z.number()).default({}),
+  rules: z.array(ControlRuleSchema).min(1).max(24),
+  /** Instrument ids, most important first: the order data is sent down, and kept when storage overflows. */
+  downlinkPriority: z.array(z.string().max(64)).max(24).default([]),
+  version: z.number().int().positive().default(1),
+  origin: z.object({ kind: z.enum(["model_generated", "user_authored", "mission_package"]), modelId: z.string().optional(), rationale: z.string().max(600).optional() }).default({ kind: "user_authored" }),
+});
+export type Controller = z.infer<typeof ControllerSchema>;
+
+export const SystemsSchema = z.object({
+  /** True once the mission is wired: a part then works only through its lines. False keeps the pre-wiring behaviour (every part is assumed connected). */
+  wired: z.boolean().default(false),
+  links: z.array(LinkSchema).max(200).refine(uniqueIds, "link ids must be unique").default([]),
+  controllers: z.array(ControllerSchema).max(8).refine(uniqueIds, "controller ids must be unique").default([]),
+});
+
 export const MissionConfigSchema = z.object({
   meta: z.object({
     name: z.string(),
@@ -166,6 +250,10 @@ export const MissionConfigSchema = z.object({
     /** Programme budget cap in the game cost model, $M. */
     budgetMusd: z.number().positive().optional(),
     missionDurationDays: z.number().positive().max(3650).default(365),
+    /** Chosen launch vehicle class (see game/launch.ts). Unset until the team picks one. */
+    launchVehicleId: z.string().max(40).optional(),
+    /** Months from programme start to the launch window: the development-time allocation. */
+    scheduleMonths: z.number().positive().max(240).optional(),
     yearsInService: z.number().min(0).default(0),
   }),
   missionTime: z.iso.datetime({ offset: true }),
@@ -198,6 +286,7 @@ export const MissionConfigSchema = z.object({
     nodes: z.array(SceneNodeSchema).refine(uniqueIds, "scene node ids must be unique"),
     trajectories: z.array(TrajectoryOverlaySchema).max(6).refine(uniqueIds, "trajectory ids must be unique").default([]),
   }),
+  systems: SystemsSchema.default({ wired: false, links: [], controllers: [] }),
   assets: z.array(AssetRecordSchema).refine(uniqueIds, "asset ids must be unique"),
   scripts: z.array(ScriptRecordSchema).refine(uniqueIds, "script ids must be unique"),
 });
@@ -205,8 +294,15 @@ export const MissionConfigSchema = z.object({
 export type MissionConfig = z.infer<typeof MissionConfigSchema>;
 
 /** Cross-field integrity rules that the structural schema cannot express. */
+/** Extra integrity rules contributed by other modules (the systems graph registers its own here). */
+const EXTRA_RULES: ((config: MissionConfig) => string[])[] = [];
+export function registerIntegrityRule(rule: (config: MissionConfig) => string[]): void {
+  if (!EXTRA_RULES.includes(rule)) EXTRA_RULES.push(rule);
+}
+
 export function referentialIssues(config: MissionConfig): string[] {
   const issues: string[] = [];
+  for (const rule of EXTRA_RULES) issues.push(...rule(config));
   const assetIds = new Set(config.assets.map((a) => a.id));
   const nodeIds = new Set(config.scene.nodes.map((n) => n.id));
   const componentIds = new Set([
@@ -233,6 +329,13 @@ export function parseMissionConfig(input: unknown): { ok: true; config: MissionC
   if (!parsed.success) {
     return { ok: false, issues: parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`) };
   }
-  const issues = referentialIssues(parsed.data);
-  return issues.length ? { ok: false, issues } : { ok: true, config: parsed.data };
+  // A line goes with the parts it joins: when a part is removed, its lines are removed with it.
+  const data = parsed.data;
+  const nodes = new Set(["bus", ...data.spacecraft.components.map((c) => c.id)]);
+  const links = data.systems.links.filter((l) => nodes.has(l.from.node) && nodes.has(l.to.node));
+  const config: MissionConfig = links.length === data.systems.links.length && data.systems.controllers.every((c) => c.downlinkPriority.every((id) => nodes.has(id)))
+    ? data
+    : { ...data, systems: { ...data.systems, links, controllers: data.systems.controllers.map((c) => ({ ...c, downlinkPriority: c.downlinkPriority.filter((id) => nodes.has(id)) })) } };
+  const issues = referentialIssues(config);
+  return issues.length ? { ok: false, issues } : { ok: true, config };
 }

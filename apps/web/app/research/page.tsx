@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import Backdrop from "@/components/Backdrop";
 import Nav from "@/components/Nav";
-import { type Account, api } from "@/lib/api";
+import { go as navigate, type Account, api } from "@/lib/api";
 
 const KINDS = ["mission_problem", "hypothesis", "user_contribution", "design_change", "trade_study", "simulation_result", "tool_execution", "scientific_evidence", "validation_report", "ai_evaluation", "failure", "mission_outcome"];
 const tone = (v: string): string => (v === "model_judgment" || v === "unverified" ? "warn" : v === "heuristic" ? "" : "ok");
@@ -19,7 +19,7 @@ export default function Research() {
   const [open, setOpen] = useState<any>(null);
 
   useEffect(() => {
-    if (account === null) window.location.href = "/auth?next=/research";
+    if (account === null) navigate("/auth?next=/research");
     if (account) void api("GET", "/api/knowledge/status").then(setStatus).catch(() => undefined);
   }, [account]);
   useEffect(() => {

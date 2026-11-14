@@ -15,6 +15,11 @@ import type { LlmService } from "../llm/llm.js";
 import { BODIES } from "../science/orbital.js";
 import { type Component, ComponentSchema, type MissionConfig } from "../state/schema.js";
 import type { MissionVersion } from "../state/store.js";
+import { applyPatches } from "../core/paths.js";
+import { parseMissionConfig } from "../state/schema.js";
+import { SIGNALS, TARGET_FORMS } from "../systems/controller.js";
+import { EXPR_FUNCTIONS } from "../systems/expr.js";
+import { harnessPatches, installPart, portsOf } from "../systems/graph.js";
 import { INTENTS, type Intent, type MissingInformation, OPERATION_CATEGORIES, type Operation, type OperationCategory, type StructuredRequirement } from "./types.js";
 
 type Draft = Omit<Operation, "id">;
@@ -63,6 +68,18 @@ const RULES: Rule[] = [
         assumptions: [],
       }],
     };
+  },
+  // Wiring: "connect inst1", "wire up the neutron spectrometer"
+  (clause, config) => {
+    const m = /\b(?:connect|wire(?:\s+up)?|hook\s+up)\s+(?:the\s+)?(.+?)[.!]?\s*$/i.exec(clause);
+    if (!m) return null;
+    const wanted = m[1]!.toLowerCase();
+    const parts = config.spacecraft.components;
+    const part = parts.find((c) => c.id.toLowerCase() === wanted) ?? parts.find((c) => c.name.toLowerCase() === wanted) ?? parts.find((c) => c.name.toLowerCase().includes(wanted));
+    if (!part) return { missing: [{ field: "componentId", blocking: true, question: `No part called "${m[1]}" is on the spacecraft. Parts on board: ${parts.map((c) => `${c.name} (${c.id})`).join(", ")}` }] };
+    const patches = harnessPatches(config, part.id);
+    if (!patches.length) return { missing: [{ field: "componentId", blocking: true, question: `${part.name} already has every line it needs, at a rating that carries it.` }] };
+    return { operations: [{ category: "engineering_design", intent: "set_config", description: `Connect ${part.name} with its standard lines`, params: { patches, rationale: clause }, assumptions: ["Lines sized 25% above the part's peak power and data rate"] }] };
   },
   // 3D asset generation
   (clause) => {
@@ -248,7 +265,7 @@ export function analyzeRuleBased(text: string, mission: MissionVersion): Structu
       missing.push({
         field: "request",
         blocking: true,
-        question: `I could not interpret "${clause}" with the built-in pattern analyser (no language model is configured). Rephrase it as a concrete action, e.g. "set orbit altitude to 150 km", "add a 0.5 m2 solar panel", "set rover.site.slopeDeg to 18", "simulate battery over 10 orbits", "compute the link budget".`,
+        question: `I could not interpret "${clause}" with the built-in pattern analyser (no language model is configured). Rephrase it as a concrete action, e.g. "set orbit altitude to 150 km", "add a 0.5 m2 solar panel", "connect the neutron spectrometer", "set rover.site.slopeDeg to 18", "simulate battery over 10 orbits", "compute the link budget".`,
       });
       continue;
     }
@@ -278,13 +295,39 @@ const LlmRequirement = z.object({
     }),
   ),
   missingInformation: z.array(z.object({ field: z.string(), question: z.string(), blocking: z.boolean() })),
+  directReply: z.string().optional().describe("Empty when operations are returned. Otherwise your reply to the player, in the player's language."),
+  hypothesis: z.enum(["none", "supported", "conditional", "refuted", "outside_model"]).optional().describe("When the player put forward an idea: supported (it holds; you return the operations that build it), conditional (it can work only if something else changes — say what), refuted (it cannot work, for the reasons you give), outside_model (the engineering models here do not represent what the idea depends on, so it can be neither confirmed nor built). none for a plain question or instruction."),
 });
+
+const PORT_TABLE = `Ports — ${(["bus", "solar_panel", "battery", "instrument", "antenna", "computer", "load", "adcs"] as const).map((t) => `${t}: ${portsOf(t).map((p) => `${p.name} (${p.kind} ${p.dir})`).join(", ")}`).join("; ")}.`;
+const SIGNAL_TABLE = SIGNALS.map((s) => `${s.name} [${s.unit}] ${s.meaning}`).join("; ");
+
+/** One earlier exchange between a player and their AI. */
+export interface Turn { said: string; replied: string; outcome: string }
+
+/** Would these operations produce a valid mission? Returns the reasons when they would not. */
+export function dryRun(operations: Operation[], config: MissionConfig): string[] {
+  let next: unknown = config;
+  try {
+    for (const op of operations) {
+      if (op.intent === "set_config") next = applyPatches(next, op.params.patches as PatchOp[]);
+      if (op.intent === "add_component" && (op.params.target ?? "spacecraft") === "spacecraft") {
+        const c = next as MissionConfig;
+        next = op.params.connect === true ? installPart(c, op.params.component as Component) : { ...c, spacecraft: { ...c.spacecraft, components: [...c.spacecraft.components, op.params.component as Component] } };
+      }
+    }
+  } catch (err) {
+    return [err instanceof Error ? err.message : String(err)];
+  }
+  const parsed = parseMissionConfig(next);
+  return parsed.ok ? [] : parsed.issues;
+}
 
 const ANALYSIS_SYSTEM = `You convert a user's natural-language request about a space-mission design into structured operations for an engineering pipeline. You do not execute anything.
 
 Each operation has a category, an intent, and a JSON params object. Intents and their params:
 - set_config: { "patches": [{"op":"set"|"append"|"remove","path":"dot.path","value":...}], "rationale": string } — change existing configuration values. Array elements are addressed by their id, e.g. "spacecraft.components.sp1.areaM2". Never patch "scripts" or "assets".
-- add_component: { "target": "spacecraft"|"rover", "component": {...}, "withAsset": boolean } — component types and fields: solar_panel {id,type,name,massKg,areaM2,efficiency(0-1),pointingLoss,degradationPerYear}; battery {id,type,name,massKg,capacityWh,maxDepthOfDischarge}; antenna {id,type,name,massKg,frequencyGHz,diameterM or gainDbi,txPowerW,dcPowerW,dutyCycle,dataRateBps,otherLossesDb,requiredEbN0Db}; load {id,type,name,massKg,powerW,dutyCycle}. Choose an id not already in use.
+- add_component: { "target": "spacecraft"|"rover", "component": {...}, "withAsset": boolean } — component types and fields: solar_panel {id,type,name,massKg,areaM2,efficiency(0-1),pointingLoss,degradationPerYear}; battery {id,type,name,massKg,capacityWh,maxDepthOfDischarge}; antenna {id,type,name,massKg,frequencyGHz,diameterM or gainDbi,txPowerW,dcPowerW,dutyCycle,dataRateBps,otherLossesDb,requiredEbN0Db}; load {id,type,name,massKg,powerW,dutyCycle}; instrument {id,type,name,kind(camera|spectrometer|neutron_spectrometer|radar|magnetometer|thermal_imager|lidar),massKg,powerW,dutyCycle,dataRateBps,apertureM?,wavelengthUm?}; adcs {id,type,name,massKg,powerW,pointingAccuracyDeg,stabilityArcsec} (attitude control: sharper images, tighter antenna pointing); computer {id,type,name,massKg,powerW,storageGb,compressionRatio(1-20)} (onboard data handling). Every component may carry costMusd and leadTimeMonths. Choose an id not already in use.
 - compute: { "need": tag, ... } — a calculation. Tags: calc.orbit.elements {altitudeKm?}, calc.orbit.transfer {targetAltitudeKm}, calc.power.budget, calc.comms.link {antennaId?, dataRateBps?}, calc.rover.mobility {slopeDeg?}, calc.ephemeris.sun {time?}.
 - simulate_power: { "orbits"?: number }
 - retrieve_ephemeris: { "target": "sun"|"earth"|"moon"|"mars", "center"?: same set, "time"?: ISO-8601 }
@@ -294,10 +337,40 @@ Each operation has a category, an intent, and a JSON params object. Intents and 
 - search_memory: { "query": string }
 - custom: { "goal": string } — only when none of the above can express the operation; it will need multi-tool planning.
 
+Wiring (config.systems.links). A part does nothing unless its lines exist: it needs a power line to or from the bus, an instrument needs a data line to storage for its measurements to be kept, an antenna needs a data line feeding it, and control logic can command only parts it has a control line to. Every line has a rating (W for power, bit/s for data) and a mass; an undersized line holds the part back. The derived result "systems.wiring" shows, for every part, what its lines deliver and what is wrong, and for every line what it carries.
+${PORT_TABLE}
+- To add a line: set_config with {"op":"append","path":"systems.links","value":{"id":"ln-…","kind":"power"|"data"|"control","from":{"node":"bus"|componentId,"port":…},"to":{"node":…,"port":…},"rating":number (omit for control),"lengthM":number}}. A line starts at an output port and ends at an input port of the same kind; one end of a power line is always the bus.
+- To resize or remove a line: {"op":"set","path":"systems.links.<lineId>.rating","value":…} or {"op":"remove","path":"systems.links.<lineId>"}.
+- add_component also accepts "connect": true, which runs the part's standard lines (sized 25% above what it needs). Use connect true when the player asks you to build or add something for use; leave it out only when they say they want to wire it themselves.
+- A line's mass in kg is its length in metres times: power 0.02 + 0.00025 × rating in W; data 0.02 + 0.01 × log10(rating in bit/s ÷ 1,000,000 + 1); control 0.01. Use the length of the lines already on this spacecraft as the typical run. With these you can state what a proposed line weighs.
+- When the player asks what lines something needs, answer in directReply from the port table and the part's numbers (its power, its data rate), say what rating each line needs and what it weighs, and build nothing.
+
+Control logic (config.systems.controllers). A controller is new onboard behaviour: rules that run once per simulated day in the flight simulation, read the spacecraft's state, and command parts. This is how "make something that does X when Y" is built — not generate_script.
+- To install one: set_config with {"op":"append","path":"systems.controllers","value":{"id":"ctl-…","name":…,"description":what it does in plain words,"hostId":"bus" or an onboard computer's id,"memory":{name:startValue,…},"rules":[{"when":condition,"do":[{"target":…,"value":expression}],"note":short reason}],"downlinkPriority":[instrument ids, most important first],"origin":{"kind":"model_generated","rationale":why this design}}}
+- Conditions and values are expressions over these signals: ${SIGNAL_TABLE}; a controller's own memory as mem.<name>; and, in a value, nominal (the target's normal setting). Operators: + - * / < > <= >= == != and or not ( ). Functions: ${EXPR_FUNCTIONS.join(", ")}.
+- Targets: ${TARGET_FORMS.join("; ")}.
+- Every rule whose condition holds fires, in order, each day; a later rule overrides an earlier one on the same target; a part no rule commands runs at its normal setting. Use memory for hysteresis (enter saving mode below one threshold, leave it above another).
+- A controller can command only parts with a control line from its host; if one is missing, add that control line in the same set_config.
+- downlinkPriority sets whose data goes down first and whose is kept when storage overflows.
+- When the player asks for control logic ("make a controller that…", "when X happens do Y"), build it now. Do not ask for thresholds or settings they left out: choose sensible ones from the mission's own numbers (for example the battery's depth-of-discharge limit), list each under assumptions, and say in the description that they can be changed. Ask only when the request does not say what the controller should do at all.
+- A controller may be installed before the parts it will command exist: use group targets ("instruments", "kind:camera") so that it commands whatever is on board and wired when the mission flies.
+- Installing control logic changes the flight, not the design snapshot: the pipeline flies the mission with and without it on the same in-flight events and reports the measured difference.
+
 Rules:
 - Ground every path and id in the mission configuration you are given. Do not invent paths.
 - If the request leaves out a value that materially changes the outcome and has no safe default, add a missingInformation entry with blocking=true instead of guessing. Ask only what is necessary; when a conventional default exists, use it and record it under assumptions.
 - A request may contain several operations; keep them in the order they should happen.
+- The player is a crew member talking to their own mission AI, often thinking aloud: "if we had X, couldn't we solve Y?". When the idea is physically sound and can be expressed as operations, return the operations that build it — the pipeline then builds it in a test copy and measures whether it helps, which is a better answer than an opinion.
+- Classify every idea in "hypothesis". An idea that depends on something these models do not represent (dust on arrays, thermal balance, radiation dose, propellant, structural loads, and anything else absent from the derived results) is outside_model: say plainly that this game's models do not cover it, what they do cover that is nearest, and do not invent a number for it.
+- When the idea cannot work (the physics is wrong, it would not affect the problem named, or nothing here can express it), return no operations and say so in directReply: why it does not work, using numbers from the derived results, and what kinds of change would address the problem — as options with their costs, never as the single thing to do.
+- Building an object: generate_asset with a "prompt" builds the 3D object AND attaches it to the spacecraft in the shared scene. Never add a second operation to place, attach, size or check it, and never use "custom" for that. One generate_asset operation is the whole request.
+- Parts catalogue: when the mission context lists a catalogue part that matches what the player asks for, use add_component with exactly that part's component fields (choose a fresh id, withAsset true). If several catalogue parts could be meant, do not pick: return no operations and ask which in directReply, saying how they differ. A part that is not in the catalogue can still be built: give it realistic values and list every value you chose under assumptions.
+- Use "custom" only when no other intent can express the operation.
+- The mission context has "flight": the current design flown through its whole mission in simulation (totals, the periods when power is short with their dates, values through the year, in-flight events, data by instrument, what the control logic did). Answer questions about when something happens, how long it lasts and how bad it gets from it, in directReply, with the dates. It is a daily-average simulation with the stated sampling; say so when precision matters.
+- You are this one player's AI. When told which seat they hold in the crew, start from that seat's concerns, and when their idea reaches into another seat's area (it costs power, mass, data rate, money) say which seat that is and who holds it, so they can talk to that crewmate. Never answer as if you spoke for the whole crew.
+- Earlier turns of your conversation with this player, when given, are context: "it", "that one", "do it" refer to them. Other players have their own conversations you cannot see; the shared design is the mission configuration you are given, which already includes everyone's changes.
+- If a previous attempt at this request was rejected by validation, the reasons are given: fix exactly those and return the corrected operations.
+- When the player asks something you can answer from the configuration and derived results alone (what a part does, what it is connected to, why a number is what it is), answer in directReply and return no operations. Never invent values that are not in the material given.
 - Do not judge feasibility or scientific validity here; later stages do that with calculations.
 - Reference material, when present, is retrieved background with its evidence level. Use it to interpret terminology and conventions; it never overrides the mission configuration.`;
 
@@ -305,10 +378,24 @@ Rules:
 export type KnowledgeRetriever = (query: string) => { context: string; citations: { n: number; id: string; source: string; verification: VerificationLevel }[] };
 
 export class RequirementAnalyzer {
-  constructor(private readonly llm: LlmService, private readonly retrieve?: KnowledgeRetriever) {}
+  constructor(private readonly llm: LlmService, private readonly retrieve?: KnowledgeRetriever, private readonly missionContext?: () => string) {}
 
-  async analyze(text: string, mission: MissionVersion, signal?: AbortSignal): Promise<StructuredRequirement> {
+  async analyze(text: string, mission: MissionVersion, signal?: AbortSignal, history: Turn[] = [], player = ""): Promise<StructuredRequirement> {
     if (!this.llm.status().available) return analyzeRuleBased(text, mission);
+    // The model's operations are tried against the mission before they are accepted; what validation rejects goes back to it, twice at most.
+    let feedback: string[] = [];
+    let last: StructuredRequirement | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      last = await this.analyzeOnce(text, mission, signal, history, feedback, player);
+      if (!last.operations.length) return last;
+      const problems = dryRun(last.operations, mission.config);
+      if (!problems.length) return attempt ? { ...last, analysis: { ...last.analysis, repairs: attempt } } : last;
+      feedback = problems.slice(0, 8);
+    }
+    return { ...last!, operations: [], missingInformation: [...last!.missingInformation, { field: "operations", blocking: true, question: `I could not turn that into a change the mission accepts. The last attempt was rejected because: ${feedback.join("; ")}` }] };
+  }
+
+  private async analyzeOnce(text: string, mission: MissionVersion, signal: AbortSignal | undefined, history: Turn[], feedback: string[], player: string): Promise<StructuredRequirement> {
     const { assets: _a, scripts, scene, ...core } = mission.config;
     let retrieved: ReturnType<KnowledgeRetriever> | null = null;
     try {
@@ -325,8 +412,12 @@ export class RequirementAnalyzer {
         `Scene node ids: ${scene.nodes.map((n) => n.id).join(", ") || "(none)"}`,
         `Attached scripts: ${scripts.map((s) => `${s.id} (${s.name})`).join(", ") || "(none)"}`,
         `Derived results:\n${JSON.stringify(Object.fromEntries(Object.entries(mission.derived).map(([k, v]) => [k, k === "orbit.trajectory" ? "(omitted)" : v.value])))}`,
+        ...(this.missionContext ? [`Mission context (the problem the crew is solving, their goals, and the parts catalogue):\n${this.missionContext()}`] : []),
         ...(retrieved?.context ? [`Reference material (retrieved from the research knowledge base):\n${retrieved.context}`] : []),
+        ...(player ? [`The player you are talking to:\n${player}`] : []),
+        ...(history.length ? [`Your conversation with this player so far (oldest first):\n${history.map((t) => `Player: ${t.said}\nYou (${t.outcome}): ${t.replied}`).join("\n")}`] : []),
         `User request:\n${text}`,
+        ...(feedback.length ? [`Your previous operations for this request were rejected by validation:\n- ${feedback.join("\n- ")}\nReturn corrected operations.`] : []),
       ].join("\n\n"),
     });
     const operations: Operation[] = [];
@@ -352,6 +443,8 @@ export class RequirementAnalyzer {
       summary: parsed.summary,
       operations,
       missingInformation: missing,
+      ...(parsed.directReply?.trim() && operations.length === 0 ? { directReply: parsed.directReply.trim() } : {}),
+      ...(parsed.hypothesis && parsed.hypothesis !== "none" ? { hypothesis: parsed.hypothesis } : {}),
       analysis: { method: "llm", modelId: this.llm.modelId, verification: "model_judgment", ...(retrieved?.citations.length ? { retrievedSources: retrieved.citations.map((c) => ({ n: c.n, id: c.id, source: c.source, verification: c.verification })) } : {}) },
       missionVersionInspected: mission.version,
     };

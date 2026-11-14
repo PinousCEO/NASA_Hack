@@ -7,9 +7,10 @@
  * seed always yields the same mission (fair leaderboards) while different seeds vary the
  * budget, mass allocation, launch date and a programme complication.
  */
+import { prewire } from "../systems/graph.js";
 import type { z } from "zod";
 import type { DisciplineId } from "../nasa/lifecycle.js";
-import { type Component, type MissionConfig, type MissionConfigSchema, parseMissionConfig } from "../state/schema.js";
+import { type Component, type MissionConfig, MissionConfigSchema, parseMissionConfig } from "../state/schema.js";
 
 export type ObjectiveMetric =
   | { type: "derived"; node: string; field: string }
@@ -28,6 +29,10 @@ export interface Objective {
   zeroAt: number;
   fullAt: number;
   unit: string;
+  /** Set by the team's mission definition: the objective it named as primary (weighted up). */
+  primary?: boolean;
+  /** A stretch goal the team committed to: earns bonus points, costs points if not delivered. */
+  stretch?: boolean;
 }
 
 export interface CatalogItem {
@@ -51,6 +56,8 @@ export interface Scenario {
   references: string[];
   baseConfig: z.input<typeof MissionConfigSchema>;
   objectives: Objective[];
+  /** Stretch goals a team may commit to when it defines its mission. */
+  stretchGoals: Objective[];
   catalog: CatalogItem[];
   disciplines: DisciplineId[];
 }
@@ -81,6 +88,10 @@ const CATALOG: CatalogItem[] = [
   { id: "gpr", label: "Sounding radar", discipline: "payload", description: "Probes subsurface layering. Power-hungry.", component: comp({ type: "instrument", kind: "radar", name: "Sounding radar", massKg: 12, powerW: 60, dutyCycle: 0.1, dataRateBps: 2e6, costMusd: 11 }) },
   { id: "lola", label: "Laser altimeter", discipline: "payload", description: "Topography and permanently shadowed region mapping.", component: comp({ type: "instrument", kind: "lidar", name: "Laser altimeter", massKg: 10, powerW: 35, dutyCycle: 0.5, dataRateBps: 1e5, apertureM: 0.14, wavelengthUm: 1.064, costMusd: 9 }) },
   { id: "mag", label: "Magnetometer", discipline: "payload", description: "Low-mass fields instrument.", component: comp({ type: "instrument", kind: "magnetometer", name: "Magnetometer", massKg: 1.5, powerW: 3, dutyCycle: 1, dataRateBps: 5000, costMusd: 1.5 }) },
+  { id: "adcs-rw", label: "Reaction wheels + star tracker", discipline: "systems", description: "Three-axis control: points to 0.02° and holds 2 arcsec. Sharp images and a tight antenna beam need it.", component: comp({ type: "adcs", name: "Reaction wheels + star tracker", massKg: 6.5, powerW: 22, dutyCycle: 1, pointingAccuracyDeg: 0.02, stabilityArcsec: 2, costMusd: 4.5 }) },
+  { id: "adcs-fine", label: "Fine-pointing attitude control", discipline: "systems", description: "Wheels, two star trackers and a gyro: 0.005° and 0.5 arcsec. Heavy, hungry and slow to deliver.", component: comp({ type: "adcs", name: "Fine-pointing attitude control", massKg: 11, powerW: 38, dutyCycle: 1, pointingAccuracyDeg: 0.005, stabilityArcsec: 0.5, costMusd: 9.5, leadTimeMonths: 10 }) },
+  { id: "obc-comp", label: "Onboard computer · 4:1 compression", discipline: "systems", description: "Compresses science data four to one before downlink and adds 128 Gb of storage.", component: comp({ type: "computer", name: "Onboard computer 4:1", massKg: 3.2, powerW: 16, dutyCycle: 1, storageGb: 128, compressionRatio: 4, costMusd: 3.8 }) },
+  { id: "obc-store", label: "Mass memory unit · 512 Gb", discipline: "systems", description: "Storage only: rides out a long ground-station outage.", component: comp({ type: "computer", name: "Mass memory unit 512 Gb", massKg: 2.4, powerW: 7, dutyCycle: 1, storageGb: 512, compressionRatio: 1, costMusd: 1.6 }) },
 ];
 
 const CUBESAT_CATALOG: CatalogItem[] = [
@@ -90,6 +101,8 @@ const CUBESAT_CATALOG: CatalogItem[] = [
   { id: "cs-cam", label: "Multispectral imager · 9 cm", discipline: "payload", description: "Ocean-colour bands.", component: comp({ type: "instrument", kind: "camera", name: "Multispectral imager 9 cm", massKg: 1.6, powerW: 7, dutyCycle: 0.15, dataRateBps: 6e6, apertureM: 0.09, wavelengthUm: 0.55, costMusd: 0.9 }) },
   { id: "cs-tir", label: "Thermal microbolometer · 3 cm", discipline: "payload", description: "Sea-surface temperature context.", component: comp({ type: "instrument", kind: "thermal_imager", name: "Thermal microbolometer", massKg: 0.5, powerW: 3, dutyCycle: 0.3, dataRateBps: 2e5, apertureM: 0.03, wavelengthUm: 10, costMusd: 0.25 }) },
   { id: "cs-mag", label: "Magnetometer", discipline: "payload", description: "Boom-mounted fluxgate.", component: comp({ type: "instrument", kind: "magnetometer", name: "Magnetometer", massKg: 0.2, powerW: 1, dutyCycle: 1, dataRateBps: 2000, costMusd: 0.1 }) },
+  { id: "cs-adcs", label: "CubeSat wheels + star tracker", discipline: "systems", description: "Half-unit attitude control: 0.03° and 1.5 arcsec. Without it images smear.", component: comp({ type: "adcs", name: "CubeSat wheels + star tracker", massKg: 0.9, powerW: 2.5, dutyCycle: 1, pointingAccuracyDeg: 0.03, stabilityArcsec: 1.5, costMusd: 0.32 }) },
+  { id: "cs-obc", label: "Payload computer · 3:1 compression", discipline: "systems", description: "Compresses imagery three to one and adds 64 Gb of storage.", component: comp({ type: "computer", name: "Payload computer 3:1", massKg: 0.25, powerW: 2, dutyCycle: 1, storageGb: 64, compressionRatio: 3, costMusd: 0.12 }) },
 ];
 
 const DSN_34M = { name: "34 m deep-space station", antennaGainDbi: 68.2, systemNoiseTempK: 30, minElevationDeg: 10 };
@@ -113,7 +126,7 @@ export const SCENARIOS: Scenario[] = [
     disciplines: ["systems", "flight_dynamics", "power", "communications", "payload", "surface"],
     catalog: CATALOG,
     baseConfig: {
-      meta: { name: "Lunar South Pole Volatiles Prospector", description: "Polar orbiter with hydrogen-mapping payload and a surface scout rover.", massLimitKg: 180, budgetMusd: 125, missionDurationDays: 365 },
+      meta: { name: "Lunar South Pole Volatiles Prospector", description: "Polar orbiter with hydrogen-mapping payload and a surface scout rover.", massLimitKg: 180, budgetMusd: 125, missionDurationDays: 365, scheduleMonths: 36 },
       missionTime: "2027-03-01T00:00:00Z",
       centralBody: "moon",
       orbit: { semiMajorAxisKm: 1837.4, eccentricity: 0, inclinationDeg: 90, raanDeg: 0, argPeriapsisDeg: 0, trueAnomalyDeg: 0, epoch: "2027-03-01T00:00:00Z" },
@@ -156,8 +169,15 @@ export const SCENARIOS: Scenario[] = [
       { id: "link", title: "Link margin", description: "Downlink closes with 6 dB of margin.", category: "engineering", weight: 6, metric: { type: "derived", node: "comms.link", field: "worstMarginDb" }, zeroAt: 0, fullAt: 6, unit: "dB" },
       { id: "rover", title: "Rover reaches the ridge", description: "Slope capability exceeds the site slope by 8°.", category: "engineering", weight: 6, metric: { type: "derived", node: "rover.performance", field: "slopeMarginDeg" }, zeroAt: 0, fullAt: 8, unit: "°" },
       { id: "survive", title: "Survive the eclipse season", description: "No days with negative power margin across the simulated mission.", category: "engineering", weight: 6, metric: { type: "simulation", field: "daysPowerNegative" }, zeroAt: 30, fullAt: 0, unit: "days" },
-      { id: "mass", title: "Mass margin", description: "Hold 10% of the launch mass allocation in reserve.", category: "programmatic", weight: 8, metric: { type: "derived", node: "mass.budget", field: "marginFraction" }, zeroAt: 0, fullAt: 0.1, unit: "×limit" },
+      { id: "mass", title: "Mass margin", description: "Hold 10% of what the launch vehicle can lift in reserve.", category: "programmatic", weight: 8, metric: { type: "derived", node: "launch.vehicle", field: "marginFraction" }, zeroAt: 0, fullAt: 0.1, unit: "×limit" },
       { id: "cost", title: "Cost margin", description: "Finish with 8% of the budget unspent.", category: "programmatic", weight: 10, metric: { type: "derived", node: "cost.budget", field: "marginFraction" }, zeroAt: 0, fullAt: 0.08, unit: "×budget" },
+      { id: "resilience", title: "Deliver through the flight", description: "Through every in-flight event, return at least 90% of the science data an untroubled flight would.", category: "engineering", weight: 8, metric: { type: "simulation", field: "scienceDeliveredFraction" }, zeroAt: 0.5, fullAt: 0.9, unit: "" },
+      { id: "schedule", title: "Ready for the launch window", description: "Hold 8% of the development time in reserve before the launch window.", category: "programmatic", weight: 6, metric: { type: "derived", node: "schedule.budget", field: "marginFraction" }, zeroAt: 0, fullAt: 0.08, unit: "×schedule" },
+    ],
+    stretchGoals: [
+      { id: "s-thermal", title: "Find the cold traps", description: "Also carry a thermal imager to map where ice can survive.", category: "science", weight: 6, metric: { type: "instrument", kind: "thermal_imager" }, zeroAt: 0, fullAt: 1, unit: "" },
+      { id: "s-topography", title: "Map the shadowed terrain", description: "Also carry a laser altimeter for topography inside permanent shadow.", category: "science", weight: 6, metric: { type: "instrument", kind: "lidar" }, zeroAt: 0, fullAt: 1, unit: "" },
+      { id: "s-subsurface", title: "Look below the surface", description: "Also carry a sounding radar to probe buried ice layers.", category: "science", weight: 6, metric: { type: "instrument", kind: "radar" }, zeroAt: 0, fullAt: 1, unit: "" },
     ],
   },
   {
@@ -175,7 +195,7 @@ export const SCENARIOS: Scenario[] = [
     disciplines: ["systems", "flight_dynamics", "power", "communications", "payload"],
     catalog: CUBESAT_CATALOG,
     baseConfig: {
-      meta: { name: "Coastal Watch 6U CubeSat", description: "Sun-synchronous ocean-colour imaging CubeSat.", massLimitKg: 12, budgetMusd: 3.2, missionDurationDays: 365 },
+      meta: { name: "Coastal Watch 6U CubeSat", description: "Sun-synchronous ocean-colour imaging CubeSat.", massLimitKg: 12, budgetMusd: 3.2, missionDurationDays: 365, scheduleMonths: 18 },
       missionTime: "2027-06-01T00:00:00Z",
       centralBody: "earth",
       orbit: { semiMajorAxisKm: 6928.137, eccentricity: 0, inclinationDeg: 97.6, raanDeg: 150, argPeriapsisDeg: 0, trueAnomalyDeg: 0, epoch: "2027-06-01T00:00:00Z" },
@@ -205,8 +225,15 @@ export const SCENARIOS: Scenario[] = [
       { id: "battery", title: "Battery cycle life", description: "Depth of discharge at or below 20% (thousands of eclipse cycles per year).", category: "engineering", weight: 8, metric: { type: "derived", node: "power.budget", field: "depthOfDischarge" }, zeroAt: 0.5, fullAt: 0.2, unit: "" },
       { id: "link", title: "Link margin", description: "Downlink closes with 6 dB of margin.", category: "engineering", weight: 8, metric: { type: "derived", node: "comms.link", field: "worstMarginDb" }, zeroAt: 0, fullAt: 6, unit: "dB" },
       { id: "survive", title: "Positive power all year", description: "No days with negative power margin in the simulation.", category: "engineering", weight: 6, metric: { type: "simulation", field: "daysPowerNegative" }, zeroAt: 30, fullAt: 0, unit: "days" },
-      { id: "mass", title: "Fit the dispenser", description: "Hold 5% mass reserve under the 12 kg 6U limit.", category: "programmatic", weight: 10, metric: { type: "derived", node: "mass.budget", field: "marginFraction" }, zeroAt: 0, fullAt: 0.05, unit: "×limit" },
+      { id: "mass", title: "Fit the dispenser", description: "Hold 5% of what the launch can lift in reserve.", category: "programmatic", weight: 10, metric: { type: "derived", node: "launch.vehicle", field: "marginFraction" }, zeroAt: 0, fullAt: 0.05, unit: "×limit" },
       { id: "cost", title: "Cost margin", description: "Finish with 8% of the budget unspent.", category: "programmatic", weight: 8, metric: { type: "derived", node: "cost.budget", field: "marginFraction" }, zeroAt: 0, fullAt: 0.08, unit: "×budget" },
+      { id: "resilience", title: "Deliver through the flight", description: "Through every in-flight event, return at least 90% of the science data an untroubled flight would.", category: "engineering", weight: 8, metric: { type: "simulation", field: "scienceDeliveredFraction" }, zeroAt: 0.5, fullAt: 0.9, unit: "" },
+      { id: "schedule", title: "Ready for the launch window", description: "Hold 8% of the development time in reserve before the launch window.", category: "programmatic", weight: 6, metric: { type: "derived", node: "schedule.budget", field: "marginFraction" }, zeroAt: 0, fullAt: 0.08, unit: "×schedule" },
+    ],
+    stretchGoals: [
+      { id: "s-thermal", title: "Sea-surface temperature", description: "Also carry a thermal imager for temperature context.", category: "science", weight: 6, metric: { type: "instrument", kind: "thermal_imager" }, zeroAt: 0, fullAt: 1, unit: "" },
+      { id: "s-fields", title: "Space-weather monitor", description: "Also carry a magnetometer.", category: "science", weight: 4, metric: { type: "instrument", kind: "magnetometer" }, zeroAt: 0, fullAt: 1, unit: "" },
+      { id: "s-sharp", title: "Harbour-scale detail", description: "Reach a ground resolution of 4.2 m or better.", category: "science", weight: 6, metric: { type: "derived", node: "science.return", field: "bestImagingResolutionM" }, zeroAt: 6, fullAt: 4.2, unit: "m" },
     ],
   },
   {
@@ -224,7 +251,7 @@ export const SCENARIOS: Scenario[] = [
     disciplines: ["systems", "flight_dynamics", "power", "communications", "payload"],
     catalog: CATALOG.filter((c) => !["ns"].includes(c.id)),
     baseConfig: {
-      meta: { name: "Mars Weather and Relay Orbiter", description: "Near-polar Mars orbiter for weather imaging and relay.", massLimitKg: 620, budgetMusd: 480, missionDurationDays: 687 },
+      meta: { name: "Mars Weather and Relay Orbiter", description: "Near-polar Mars orbiter for weather imaging and relay.", massLimitKg: 480, budgetMusd: 480, missionDurationDays: 687, scheduleMonths: 42 },
       missionTime: "2029-01-15T00:00:00Z",
       centralBody: "mars",
       orbit: { semiMajorAxisKm: 3796.19, eccentricity: 0, inclinationDeg: 93, raanDeg: 30, argPeriapsisDeg: 0, trueAnomalyDeg: 0, epoch: "2029-01-15T00:00:00Z" },
@@ -254,13 +281,23 @@ export const SCENARIOS: Scenario[] = [
       { id: "battery", title: "Battery health", description: "Depth of discharge at or below 30%.", category: "engineering", weight: 6, metric: { type: "derived", node: "power.budget", field: "depthOfDischarge" }, zeroAt: 0.6, fullAt: 0.3, unit: "" },
       { id: "link", title: "Link margin", description: "Deep-space link closes with 3 dB of margin.", category: "engineering", weight: 10, metric: { type: "derived", node: "comms.link", field: "worstMarginDb" }, zeroAt: -3, fullAt: 3, unit: "dB" },
       { id: "survive", title: "Through conjunction and aphelion", description: "No more than 5 days of negative power margin across a Mars year.", category: "engineering", weight: 6, metric: { type: "simulation", field: "daysPowerNegative" }, zeroAt: 60, fullAt: 5, unit: "days" },
-      { id: "mass", title: "Mass margin", description: "Hold 10% of the launch mass allocation in reserve.", category: "programmatic", weight: 8, metric: { type: "derived", node: "mass.budget", field: "marginFraction" }, zeroAt: 0, fullAt: 0.1, unit: "×limit" },
+      { id: "mass", title: "Mass margin", description: "Hold 10% of what the launch vehicle can lift in reserve.", category: "programmatic", weight: 8, metric: { type: "derived", node: "launch.vehicle", field: "marginFraction" }, zeroAt: 0, fullAt: 0.1, unit: "×limit" },
       { id: "cost", title: "Cost margin", description: "Finish with 8% of the budget unspent.", category: "programmatic", weight: 10, metric: { type: "derived", node: "cost.budget", field: "marginFraction" }, zeroAt: 0, fullAt: 0.08, unit: "×budget" },
+      { id: "resilience", title: "Deliver through the flight", description: "Through every in-flight event, return at least 90% of the science data an untroubled flight would.", category: "engineering", weight: 8, metric: { type: "simulation", field: "scienceDeliveredFraction" }, zeroAt: 0.5, fullAt: 0.9, unit: "" },
+      { id: "schedule", title: "Ready for the launch window", description: "Hold 8% of the development time in reserve before the launch window.", category: "programmatic", weight: 6, metric: { type: "derived", node: "schedule.budget", field: "marginFraction" }, zeroAt: 0, fullAt: 0.08, unit: "×schedule" },
+    ],
+    stretchGoals: [
+      { id: "s-vapour", title: "Track water vapour", description: "Also carry an infrared spectrometer.", category: "science", weight: 6, metric: { type: "instrument", kind: "spectrometer" }, zeroAt: 0, fullAt: 1, unit: "" },
+      { id: "s-ice", title: "Sound the buried ice", description: "Also carry a sounding radar.", category: "science", weight: 6, metric: { type: "instrument", kind: "radar" }, zeroAt: 0, fullAt: 1, unit: "" },
+      { id: "s-detail", title: "See storm fronts in detail", description: "Reach an imaging resolution of 15 m or better.", category: "science", weight: 6, metric: { type: "derived", node: "science.return", field: "bestImagingResolutionM" }, zeroAt: 60, fullAt: 15, unit: "m" },
     ],
   },
 ];
 
 export const getScenario = (id: string): Scenario | undefined => SCENARIOS.find((s) => s.id === id);
+
+/** Every part in the game, for sandbox missions. */
+export const FULL_CATALOG: CatalogItem[] = [...CATALOG, ...CUBESAT_CATALOG];
 
 /** Deterministic PRNG (mulberry32). */
 function rng(seed: number): () => number {
@@ -280,7 +317,7 @@ const DIFFICULTY: Record<Difficulty, { budget: number; mass: number; label: stri
   chief: { budget: 0.92, mass: 0.95, label: "Chief Engineer" },
 };
 
-export function generateMission(scenarioId: string, seed: number, difficulty: Difficulty = "engineer"): GeneratedMission {
+export function generateMission(scenarioId: string, seed: number, difficulty: Difficulty = "engineer", forcedComplication?: string): GeneratedMission {
   const scenario = getScenario(scenarioId);
   if (!scenario) throw new Error(`Unknown scenario "${scenarioId}"`);
   const random = rng(seed);
@@ -303,22 +340,29 @@ export function generateMission(scenarioId: string, seed: number, difficulty: Di
     { id: "aged-cells", title: "Flight-spare solar cells", description: "Arrays are built from flight spares with two years of storage degradation.", apply: () => { cfg.meta.yearsInService = 2; } },
     { id: "extended", title: "Extended mission", description: "The sponsor asks for a 25% longer mission on the same budget.", apply: () => { cfg.meta.missionDurationDays = Math.round(cfg.meta.missionDurationDays! * 1.25); } },
   ];
+  // A power system that is short once the instruments are on: a bigger array (and a bigger line), a battery, a different
+  // orbit plane, or onboard logic that sheds load in the dark season are all ways through, each with its own cost.
+  complications.push({ id: "lean-array", title: "Descoped solar array", description: "A deployment hinge was cut from the design: the solar array delivered is half the planned size. With the instruments running, power will be short in the long-shadow season.", apply: () => { for (const c of cfg.spacecraft.components) if (c.type === "solar_panel") { c.areaM2 = round(c.areaM2 * 0.5, 0.01); c.massKg = round(c.massKg * 0.5, 0.01); } } });
   if (cfg.rover) complications.push({ id: "steep-site", title: "Steeper landing site", description: "New terrain data puts the rover's route on a steeper slope.", apply: () => { cfg.rover!.site.slopeDeg = round(14 + random() * 5, 0.5); } });
-  const complication = difficulty === "cadet" ? complications[0]! : complications[Math.floor(random() * complications.length)]!;
+  const drawable = complications.filter((c) => c.id !== "lean-array");
+  const drawn = difficulty === "cadet" ? complications[0]! : drawable[Math.floor(random() * drawable.length)]!;
+  // A brief names what is wrong at the start; otherwise it is drawn from the seed.
+  const complication = (forcedComplication && complications.find((c) => c.id === forcedComplication)) || drawn;
   complication.apply();
   cfg.meta.description = `${cfg.meta.description ?? ""} Complication: ${complication.title}.`.trim();
 
-  const parsed = parseMissionConfig(cfg);
+  // The mission is handed over built: every part it starts with is already connected by its power, data and control lines.
+  const parsed = parseMissionConfig(prewire(MissionConfigSchema.parse(cfg)));
   if (!parsed.ok) throw new Error(`Scenario "${scenarioId}" produced an invalid mission: ${parsed.issues.join("; ")}`);
   return { scenarioId, seed, difficulty, config: parsed.config, objectives: scenario.objectives, complication: { id: complication.id, title: complication.title, description: complication.description } };
 }
 
 /** Instantiate a catalogue item as a component with an id that is unused in the mission. */
-export function instantiateCatalogItem(scenarioId: string, itemId: string, config: MissionConfig): { item: CatalogItem; component: Component } {
-  const item = getScenario(scenarioId)?.catalog.find((c) => c.id === itemId);
+export function instantiateCatalogItem(catalog: CatalogItem[], itemId: string, config: MissionConfig): { item: CatalogItem; component: Component } {
+  const item = catalog.find((c) => c.id === itemId);
   if (!item) throw new Error(`Catalogue item "${itemId}" is not available in this mission`);
   const used = new Set([...config.spacecraft.components, ...(config.rover?.components ?? [])].map((c) => c.id));
-  const prefix = { solar_panel: "sp", battery: "bat", antenna: "ant", load: "load", instrument: "inst" }[item.component.type];
+  const prefix = { solar_panel: "sp", battery: "bat", antenna: "ant", load: "load", instrument: "inst", adcs: "adcs", computer: "obc" }[item.component.type];
   let n = 1;
   while (used.has(`${prefix}${n}`)) n++;
   return { item, component: { ...item.component, id: `${prefix}${n}` } as Component };

@@ -1,3 +1,4 @@
+import type { RequestAnswer } from "./answer.js";
 /** Data model shared by the request pipeline stages. */
 import type { DiffEntry, PatchOp } from "../core/paths.js";
 import type { Permission, Role, User, VerificationLevel } from "../core/types.js";
@@ -58,7 +59,11 @@ export interface StructuredRequirement {
   summary: string;
   operations: Operation[];
   missingInformation: MissingInformation[];
-  analysis: { method: "llm" | "rule_based"; modelId?: string; verification: VerificationLevel; retrievedSources?: { n: number; id: string; source: string; verification: VerificationLevel }[] };
+  /** The model's own reply when no tool is needed, or when the idea cannot work (with the reason). */
+  directReply?: string;
+  /** How the analyser judged an idea the player put forward (model judgement until something is built and measured). */
+  hypothesis?: "supported" | "conditional" | "refuted" | "outside_model";
+  analysis: { repairs?: number; method: "llm" | "rule_based"; modelId?: string; verification: VerificationLevel; retrievedSources?: { n: number; id: string; source: string; verification: VerificationLevel }[] };
   missionVersionInspected: number;
 }
 
@@ -190,6 +195,7 @@ export interface TraceEvent {
 }
 
 export type RequestStatus =
+  | "queued"
   | "analyzing"
   | "awaiting_clarification"
   | "planning"
@@ -208,6 +214,8 @@ export interface RequestRecord {
   user: User;
   trainingConsent: boolean;
   status: RequestStatus;
+  /** 1-based place in the mission's request queue while waiting; absent once it is running. */
+  queuePosition?: number;
   createdAt: string;
   updatedAt: string;
   requirement?: StructuredRequirement;
@@ -217,5 +225,11 @@ export interface RequestRecord {
   plan?: Plan;
   proposalId?: string;
   error?: string;
+  /** True for a direct action (a catalogue pick, a connection) rather than something said to an AI. */
+  action?: boolean;
+  /** True once its owner shares it with the crew, and for actions (a catalogue pick, a connection) that everyone sees anyway. A conversation with one's AI is private until then. */
+  shared?: boolean;
+  /** Plain-language answer and the results it rests on, once the request has run. */
+  answer?: RequestAnswer;
   trace: TraceEvent[];
 }

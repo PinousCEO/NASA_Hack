@@ -93,7 +93,11 @@ export function assetSpecForComponent(component: Component): AssetSpec {
       return { kind: "box", widthM: side * 1.5, heightM: side * 0.67, depthM: side };
     }
     case "load":
+    case "computer":
       return { kind: "box", widthM: 0.2, heightM: 0.1, depthM: 0.15 };
+    case "adcs":
+      // A reaction-wheel housing.
+      return { kind: "cylinder", radiusM: 0.07, heightM: 0.06 };
     case "instrument":
       return component.apertureM !== undefined
         ? { kind: "cylinder", radiusM: component.apertureM / 2, heightM: component.apertureM * 2.5 }

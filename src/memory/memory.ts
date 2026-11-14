@@ -42,7 +42,12 @@ export interface MemoryRecord {
   assumptions: string[];
   verification: VerificationLevel;
   training: { consent: boolean; qualityReviewedBy?: string; qualityReviewedAt?: string };
+  /** Set on records that hold what one person said to their AI: only that person may read them. */
+  visibility?: { ownerId: string };
 }
+
+/** May this account read this record? Records of a private conversation belong to the person who had it. */
+export const readableBy = (r: MemoryRecord, accountId: string): boolean => !r.visibility || r.visibility.ownerId === accountId;
 
 export type NewMemoryRecord = Omit<MemoryRecord, "id" | "createdAt" | "training"> & { trainingConsent?: boolean };
 

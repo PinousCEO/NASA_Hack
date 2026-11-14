@@ -15,7 +15,16 @@ export function gradeRenderer(renderer: THREE.WebGLRenderer): void {
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.0;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  // Reading shader logs forces every program to finish linking on the main thread; keep that for development builds.
+  renderer.debug.checkShaderErrors = process.env.NODE_ENV !== "production";
 }
+
+type CompileAsync = (object: THREE.Object3D, camera: THREE.Camera, target?: THREE.Scene | null) => Promise<unknown>;
+/** `renderer.compileAsync`, when this three.js build has it: links programs off the main thread where the browser allows. */
+export const compileAsyncOf = (renderer: THREE.WebGLRenderer): CompileAsync | null => {
+  const fn = (renderer as unknown as { compileAsync?: CompileAsync }).compileAsync;
+  return typeof fn === "function" ? fn.bind(renderer) : null;
+};
 
 /** Vignette, a touch of chromatic fringing at the edges, and animated grain. Runs after tone mapping. */
 const GradeShader = {
@@ -34,6 +43,21 @@ const GradeShader = {
     }`,
 };
 
+/**
+ * Makes the HDR frame safe to blur. One pixel that is not a number (a glint that overflowed,
+ * a normal of zero length) is enough for the bloom's wide blur to smear "not a number" over
+ * the whole picture, which shows as a single black frame. This pass replaces such pixels with
+ * black and caps the rest, before anything is blurred.
+ */
+const SanitizeShader = {
+  uniforms: { tDiffuse: { value: null as THREE.Texture | null } },
+  vertexShader: /* glsl */ `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: /* glsl */ `precision highp float; varying vec2 vUv; uniform sampler2D tDiffuse;
+    // Comparisons with "not a number" are false, so anything that fails both tests is replaced by zero.
+    float safe(float v){ return (v >= 0.0 && v <= 64.0) ? v : (v > 64.0 ? 64.0 : 0.0); }
+    void main(){ vec4 c = texture2D(tDiffuse, vUv); gl_FragColor = vec4(safe(c.r), safe(c.g), safe(c.b), 1.0); }`,
+};
+
 /** True when WebGL is running on a CPU rasteriser (SwiftShader, llvmpipe): effects are skipped there. */
 export function softwareGl(renderer: THREE.WebGLRenderer): boolean {
   try {
@@ -50,6 +74,13 @@ export interface Fx {
   /** Render one frame through the effect chain. */
   render(dt: number): void;
   setSize(width: number, height: number, pixelRatio: number): void;
+  /**
+   * Compile every program the scene and this chain will use, without blocking the page.
+   * A program's variant depends on where it is drawn: inside the chain the scene renders into
+   * a linear HDR target, so that is the variant compiled here — compiling against the screen
+   * would build programs that are never used and leave the real ones to stall the first frame.
+   */
+  warm(): Promise<void>;
   dispose(): void;
 }
 
@@ -59,9 +90,12 @@ export function createFx(renderer: THREE.WebGLRenderer, scene: THREE.Scene, came
   const target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: 4 });
   const composer = new EffectComposer(renderer, target);
   composer.addPass(new RenderPass(scene, camera));
+  const sanitize = new ShaderPass(SanitizeShader);
+  composer.addPass(sanitize);
   const bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), options.bloom ?? 0.55, options.radius ?? 0.55, options.threshold ?? 1.35);
   composer.addPass(bloom);
-  composer.addPass(new OutputPass());
+  const output = new OutputPass();
+  composer.addPass(output);
   const grade = new ShaderPass(GradeShader);
   composer.addPass(grade);
   return {
@@ -72,6 +106,48 @@ export function createFx(renderer: THREE.WebGLRenderer, scene: THREE.Scene, came
     setSize(width, height, pixelRatio) {
       composer.setPixelRatio(pixelRatio);
       composer.setSize(width, height);
+    },
+    async warm() {
+      const compile = compileAsyncOf(renderer);
+      if (!compile) return;
+      const previous = renderer.getRenderTarget();
+      // The same full-screen triangle the passes draw with (position + uv), so the program keys match.
+      const triangle = new THREE.BufferGeometry();
+      triangle.setAttribute("position", new THREE.Float32BufferAttribute([-1, 3, 0, -1, -1, 0, 3, -1, 0], 3));
+      triangle.setAttribute("uv", new THREE.Float32BufferAttribute([0, 2, 0, 0, 2, 0], 2));
+      const quads = (materials: (THREE.Material | undefined)[]): THREE.Scene => {
+        const holder = new THREE.Scene();
+        for (const m of materials) if (m) holder.add(new THREE.Mesh(triangle, m));
+        return holder;
+      };
+      try {
+        // The output pass picks its tone-mapping defines on first render; set them now so they compile here.
+        const out = output as unknown as { material: THREE.RawShaderMaterial; _outputColorSpace: unknown; _toneMapping: unknown };
+        if (out._toneMapping !== renderer.toneMapping || out._outputColorSpace !== renderer.outputColorSpace) {
+          const tone: Record<number, string> = { [THREE.LinearToneMapping]: "LINEAR_TONE_MAPPING", [THREE.ReinhardToneMapping]: "REINHARD_TONE_MAPPING", [THREE.CineonToneMapping]: "CINEON_TONE_MAPPING", [THREE.ACESFilmicToneMapping]: "ACES_FILMIC_TONE_MAPPING", [THREE.AgXToneMapping]: "AGX_TONE_MAPPING", [THREE.NeutralToneMapping]: "NEUTRAL_TONE_MAPPING", [THREE.CustomToneMapping]: "CUSTOM_TONE_MAPPING" };
+          out.material.defines = {};
+          if (THREE.ColorManagement.getTransfer(renderer.outputColorSpace) === THREE.SRGBTransfer) out.material.defines.SRGB_TRANSFER = "";
+          const define = tone[renderer.toneMapping];
+          if (define) out.material.defines[define] = "";
+          out.material.needsUpdate = true;
+          out._outputColorSpace = renderer.outputColorSpace;
+          out._toneMapping = renderer.toneMapping;
+        }
+        const b = bloom as unknown as { materialHighPassFilter?: THREE.Material; separableBlurMaterials?: THREE.Material[]; compositeMaterial?: THREE.Material; blendMaterial?: THREE.Material };
+        renderer.setRenderTarget(target);
+        await Promise.all([
+          compile(scene, camera),
+          compile(quads([(sanitize as unknown as { material: THREE.Material }).material, b.materialHighPassFilter, ...(b.separableBlurMaterials ?? []), b.compositeMaterial, b.blendMaterial, out.material]), camera),
+        ]);
+        // The last pass draws to the screen.
+        renderer.setRenderTarget(null);
+        await compile(quads([(grade as unknown as { material: THREE.Material }).material]), camera);
+      } catch {
+        /* warming is an optimisation: anything left over compiles on first use */
+      } finally {
+        renderer.setRenderTarget(previous);
+        triangle.dispose();
+      }
     },
     dispose() {
       composer.dispose();
@@ -85,7 +161,7 @@ export function createFx(renderer: THREE.WebGLRenderer, scene: THREE.Scene, came
  * chain. Used where a framework owns the render loop (IWSDK): the effect is skipped whenever
  * `enabled()` is false — in XR — and for every render the chain itself issues.
  */
-export function interceptRender(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera, enabled: () => boolean): { fx: Fx; restore(): void } | null {
+export function interceptRender(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera, enabled: () => boolean): { fx: Fx; hold(on: boolean): void; restore(): void } | null {
   let fx: Fx;
   try {
     fx = createFx(renderer, scene, camera);
@@ -96,7 +172,10 @@ export function interceptRender(renderer: THREE.WebGLRenderer, scene: THREE.Scen
   let inside = false;
   let last = performance.now();
   let width = 0, height = 0, ratio = 0;
+  let held = false;
   renderer.render = (s: THREE.Object3D, c: THREE.Camera): void => {
+    // While programs are still linking, drawing the scene would force each one to finish on the main thread.
+    if (held && s === scene && !renderer.xr.isPresenting) return;
     if (inside || s !== scene || !enabled() || renderer.xr.isPresenting) return direct(s, c);
     const el = renderer.domElement;
     const r = renderer.getPixelRatio();
@@ -115,6 +194,9 @@ export function interceptRender(renderer: THREE.WebGLRenderer, scene: THREE.Scen
   };
   return {
     fx,
+    hold(on) {
+      held = on;
+    },
     restore() {
       renderer.render = direct;
       fx.dispose();

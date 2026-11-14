@@ -16,8 +16,9 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { MissionVersion, Presence } from "../api";
 import { CORE_ORIGIN } from "../api";
-import { buildBus, buildComponent, buildRover, buildSpacecraft, type SpacecraftModel } from "./models";
+import { bake, buildBus, buildComponent, buildRover, buildSpacecraft, type SpacecraftModel } from "./models";
 import { type BodyId, createFlowLine, createFlowTube, createLabel, createPlanet, createSun, disposeObject, onGlobe, type Planet, toView } from "./space";
+import { type Sky, skyAt, SPIN_PERIOD_S } from "./ephemeris";
 
 export type ViewMode = "orbit" | "systems";
 export const BODY_RADIUS_KM: Record<BodyId, number> = { earth: 6378.137, moon: 1737.4, mars: 3396.19 };
@@ -55,6 +56,19 @@ export class MissionScene {
   private craft = new THREE.Group();
   private craftModel: SpacecraftModel | null = null;
   private craftSignature = "";
+  /** The instant the scene shows (ms since the Unix epoch) and how fast it runs (simulated seconds per second). */
+  clockMs = 0;
+  clockRate = 0;
+  /** One orbit in forty seconds: the pace at which the spacecraft is easy to follow. */
+  orbitPace = 150;
+  private clockStarted = false;
+  private baseMs = 0;
+  private periodS = 7000;
+  private phase0 = 0;
+  private sky: Sky | null = null;
+  private earthMarker: THREE.Group | null = null;
+  private orbitSignature = "";
+  private siteSignature = "";
   private craftBeacon: THREE.Sprite | null = null;
   private craftPhase = 0;
   private deploy = 0;
@@ -70,6 +84,8 @@ export class MissionScene {
   private bus = new THREE.Group();
   private stage = new THREE.Group();
   private connectors: Connector[] = [];
+  /** How many lines are drawn in the systems view (one per real line in the design). */
+  get lineCount(): number { return this.connectors.length; }
   private leds: THREE.Mesh[] = [];
   private avatars = new Map<string, THREE.Group>();
   private rings = new Map<string, THREE.Mesh>();
@@ -80,6 +96,7 @@ export class MissionScene {
   private flash = 0;
   private time = 0;
   private signature = "";
+  private closeUp = false;
 
   constructor() {
     this.root.name = "mission-root";
@@ -87,6 +104,9 @@ export class MissionScene {
     this.root.add(this.orbitView, this.systemsView, this.sunLight, new THREE.HemisphereLight(0x9fb2dc, 0x2a2018, 0.5));
     this.systemsView.visible = false;
     this.orbitView.add(this.craft, this.sun);
+    this.root.add(this.sunLight.target);
+    this.sunLight.shadow.mapSize.set(1024, 1024);
+    this.sunLight.shadow.bias = -0.0004;
     if (CORE_ORIGIN) this.loader.setWithCredentials(true);
 
     // Recalculation shockwave: a ring that expands from the spacecraft when new results land.
@@ -139,6 +159,11 @@ export class MissionScene {
     }
   }
 
+  /** Sun shadows on the hardware (off in XR, where the scene is scaled to a table). */
+  setShadows(on: boolean): void {
+    this.sunLight.castShadow = on;
+  }
+
   /** Resolves when NASA imagery for the current body is on screen (false: procedural fallback). */
   get planetReady(): Promise<boolean> {
     return this.planet?.ready ?? Promise.resolve(false);
@@ -157,7 +182,20 @@ export class MissionScene {
       this.planet = createPlanet(body);
       this.orbitView.add(this.planet.group);
       this.body = body;
+      if (this.earthMarker) { this.orbitView.remove(this.earthMarker); disposeObject(this.earthMarker); this.earthMarker = null; }
+      if (body !== "earth") {
+        // Where home is: the direction to Earth at the moment shown.
+        const marker = new THREE.Group();
+        const dot = new THREE.Mesh(new THREE.SphereGeometry(0.05, 20, 14), new THREE.MeshBasicMaterial({ color: new THREE.Color(0.5, 0.9, 2.2) }));
+        const tag = createLabel("EARTH", { height: 0.12, color: "#6fb6ff", sub: "direction home" });
+        tag.position.y = 0.16;
+        marker.add(dot, tag);
+        this.earthMarker = marker;
+        this.orbitView.add(marker);
+      }
       this.siteMarker = null;
+      this.siteSignature = "";
+      this.orbitSignature = "";
     }
     const lighting = mission.derived["scene.lighting"]?.value;
     if (lighting?.sunDirection) this.sunBase.copy(toView(lighting.sunDirection)).normalize();
@@ -166,11 +204,21 @@ export class MissionScene {
     const sma = config.orbit.semiMajorAxisKm as number;
     if (this.lastSma !== null && Math.abs(sma - this.lastSma) > 1e-6) this.burn = 1;
     this.lastSma = sma;
+    // The clock starts at the mission date and runs at orbit pace; after that it is the crew's to turn.
+    this.baseMs = Date.parse(config.missionTime);
+    const period = Number(mission.derived["orbit.elements"]?.value?.periodS);
+    if (Number.isFinite(period) && period > 0) this.periodS = period;
+    this.orbitPace = this.periodS / 40;
+    if (!this.clockStarted) {
+      this.clockStarted = true;
+      this.clockMs = this.baseMs;
+      this.clockRate = 0;
+    }
     this.rebuildOrbit();
     this.rebuildCraft();
     this.rebuildSite();
     // The systems view is rebuilt only when components or their placement change.
-    const signature = JSON.stringify([config.spacecraft.busDryMassKg, config.spacecraft.components.map((c: any) => [c.id, c.type, c.areaM2, c.diameterM, c.capacityWh, c.apertureM, c.kind, c.name]), config.scene.nodes, config.assets.map((a: any) => a.id)]);
+    const signature = JSON.stringify([config.spacecraft.busDryMassKg, config.spacecraft.components.map((c: any) => [c.id, c.type, c.areaM2, c.diameterM, c.capacityWh, c.apertureM, c.kind, c.name]), config.scene.nodes, config.assets.map((a: any) => a.id), (config.systems?.links ?? []).map((l: any) => [l.id, l.kind, l.from.node, l.to.node])]);
     if (signature !== this.signature) {
       this.signature = signature;
       this.rebuildSystems();
@@ -183,10 +231,16 @@ export class MissionScene {
     const mission = this.mission!;
     const R = BODY_RADIUS_KM[this.body!];
     const traj = mission.derived["orbit.trajectory"]?.value;
+    // Rebuilt only when something drawn here changed: the orbit, the date, the overlays or the numbers on the tag.
+    const elements = mission.derived["orbit.elements"]?.value;
+    const eclipse = mission.derived["orbit.eclipse"]?.value;
+    const signature = JSON.stringify([this.body, mission.config.orbit, mission.config.missionTime, (mission.config.scene.trajectories ?? []).map((t: any) => t.id), elements?.periapsisAltitudeKm, elements?.periodS, eclipse?.betaDeg, eclipse?.eclipseFraction, Boolean(traj?.pathKm)]);
+    if (signature === this.orbitSignature) return;
+    this.orbitSignature = signature;
     for (const o of [this.orbitTube, ...this.overlays, ...this.orbitView.children.filter((c) => c.userData.transient)]) {
       if (!o) continue;
       this.orbitView.remove(o);
-      disposeObject(o);
+      disposeObject(o, true);
     }
     this.orbitTube = null;
     this.overlays = [];
@@ -198,6 +252,7 @@ export class MissionScene {
     this.orbitView.add(this.orbitTube);
     const current = toView((traj.currentPositionKm as number[]).map((v) => v / R));
     this.craftPhase = this.orbitPath.reduce((best, p, i) => (p.distanceToSquared(current) < this.orbitPath[best]!.distanceToSquared(current) ? i : best), 0) / this.orbitPath.length;
+    this.phase0 = this.craftPhase; // where the spacecraft is at the mission date
 
     // Trajectory overlays: imported from GMAT or propagated with J2.
     for (const overlay of (mission.config.scene.trajectories ?? []) as { name: string; source: string; pointsKm: number[][] }[]) {
@@ -233,20 +288,26 @@ export class MissionScene {
     model.group.scale.setScalar(0.15 / model.radius);
     this.craftModel = model;
     this.deploy = 0;
-    const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: new THREE.Color(1.4, 2.6, 2.6), transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
-    halo.scale.setScalar(0.5);
-    this.craftBeacon = halo;
-    const name = createLabel(spacecraft.name.toUpperCase(), { height: 0.13, color: "#f2efe8", sub: "enlarged · not to scale" });
+    const name = createLabel(spacecraft.name.toUpperCase(), { height: 0.13, color: "#f2efe8", sub: "enlarged · 1 lap shown in 40 s" });
     name.position.y = 0.3;
+    const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: new THREE.Color(1.6, 1.9, 2.0), transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
+    halo.scale.setScalar(0.36);
+    halo.name = "beacon";
+    name.name = "craft-label";
+    this.craftBeacon = halo;
     this.craft.add(model.group, halo, name);
+    this.applyCloseUp();
   }
 
   /** Landing-site marker riding on the globe at the rover's true coordinates. */
   private rebuildSite(): void {
     const rover = this.mission!.config.rover;
+    const signature = JSON.stringify([this.body, rover ? [rover.name, rover.site, rover.wheelCount, rover.wheelRadiusM, rover.supportHalfSpanM] : null, Boolean(this.planet)]);
+    if (signature === this.siteSignature && (this.siteMarker || !rover)) return;
+    this.siteSignature = signature;
     if (this.siteMarker) {
       this.siteMarker.parent?.remove(this.siteMarker);
-      disposeObject(this.siteMarker);
+      disposeObject(this.siteMarker, true);
       this.siteMarker = null;
     }
     if (!rover || !this.planet) return;
@@ -277,12 +338,22 @@ export class MissionScene {
     return pending.then((scene) => scene.clone(true));
   }
 
+  /** A part's label says first whether its lines let it work: red when a line is missing, amber when one is too small. */
+  private partLabel(c: any): { color?: string; sub: string } {
+    const status = (this.mission?.derived["systems.wiring"]?.value as any)?.parts?.find((p: any) => p.id === c.id);
+    if (status && (status.power === 0 || status.data === 0)) return { color: "#ff4b4b", sub: `NOT CONNECTED · ${status.power === 0 ? "no power line" : "no data line"}` };
+    if (status && status.notes.length > 0) return { color: "#ffb020", sub: `LINE TOO SMALL · ${Math.round(Math.min(status.power, status.data ?? 1) * 100)}% gets through` };
+    return { sub: this.metric(c) };
+  }
+
   private metric(c: any): string {
     switch (c.type) {
       case "solar_panel": return `${c.areaM2} m² · ${(c.efficiency * 100).toFixed(0)}%`;
       case "battery": return `${c.capacityWh} Wh`;
       case "antenna": return `${c.frequencyGHz} GHz · ${c.dataRateBps >= 1e6 ? `${c.dataRateBps / 1e6} Mbps` : `${c.dataRateBps / 1e3} kbps`}`;
       case "instrument": return `${c.kind.replace(/_/g, " ")} · ${c.powerW} W`;
+      case "adcs": return `holds ${c.stabilityArcsec}″ · ${c.powerW} W`;
+      case "computer": return `${c.compressionRatio}:1 · +${c.storageGb} Gb`;
       default: return `${c.powerW} W`;
     }
   }
@@ -312,6 +383,7 @@ export class MissionScene {
 
     this.bus = new THREE.Group();
     const busModel = buildBus(config.spacecraft.busDryMassKg);
+    bake(busModel.group);
     const busHeight = fit(busModel.group, 1.0);
     this.bus.add(busModel.group);
     const busLabel = createLabel(config.spacecraft.name.toUpperCase(), { height: 0.2, color: "#f2efe8", sub: `bus ${config.spacecraft.busDryMassKg} kg` });
@@ -338,7 +410,7 @@ export class MissionScene {
       part.position.y = -0.2;
       if (c.type === "solar_panel") part.rotation.z = 0.5; // tilt the wing so the cell face catches the light
       holder.add(part);
-      const label = createLabel(c.name, { height: 0.18, sub: this.metric(c) });
+      const label = createLabel(c.name, { height: 0.18, ...this.partLabel(c) });
       label.position.y = Math.max(0.4, height + 0.12);
       label.name = "label";
       holder.add(label);
@@ -382,13 +454,16 @@ export class MissionScene {
       this.systemsView.add(line);
       this.connectors.push({ line, from, to, lift });
     };
-    const antennas = comps.filter((c) => c.type === "antenna");
-    for (const c of comps) {
-      const obj = this.componentObjects.get(c.id)!;
-      if (c.type === "solar_panel") link(obj, this.bus, COLOR.power, 1.6, 0.25);
-      else if (c.type === "battery") link(this.bus, obj, COLOR.charge, 0.8, 0.2);
-      else link(this.bus, obj, COLOR.load, 0.5 + Math.min(1.5, (c.powerW ?? c.dcPowerW ?? 10) / 60), 0.2);
-      if (c.type === "instrument") for (const a of antennas) link(obj, this.componentObjects.get(a.id)!, COLOR.data, 0.8 + Math.min(2, Math.log10(1 + c.dataRateBps) / 4), 0.6);
+    // One drawn line per real line in the design: amber carries power, cyan data, violet commands. A part with no
+    // line drawn to it is not connected — that is the state of the design, not decoration.
+    const at = (node: string): THREE.Object3D | undefined => (node === "bus" ? this.bus : this.componentObjects.get(node));
+    for (const l of (config.systems?.links ?? []) as any[]) {
+      const from = at(l.from.node);
+      const to = at(l.to.node);
+      if (!from || !to) continue;
+      if (l.kind === "power") link(from, to, COLOR.power, 1.3, 0.12);
+      else if (l.kind === "data") link(from, to, COLOR.data, 1.9, 0.34);
+      else link(from, to, 0xc58bff, 0.6, 0.56);
     }
     this.systemsView.traverse((o) => {
       if (o.name === "led") this.leds.push(o as THREE.Mesh);
@@ -401,7 +476,7 @@ export class MissionScene {
       const holder = this.componentObjects.get(c.id);
       const old = holder?.getObjectByName("label");
       if (!holder || !old) continue;
-      const label = createLabel(c.name, { height: 0.18, sub: this.metric(c) });
+      const label = createLabel(c.name, { height: 0.18, ...this.partLabel(c) });
       label.position.copy(old.position);
       label.name = "label";
       holder.remove(old);
@@ -424,9 +499,88 @@ export class MissionScene {
   }
 
   /** Preview Sun geometry `days` after the mission time (rotates the Sun about the ecliptic pole). */
+  /** The mission date, as the clock's reference. */
+  get missionDateMs(): number {
+    return this.baseMs;
+  }
+
+  /** Move the clock to an instant, and optionally change how fast it runs. */
+  setClock(ms: number, rate?: number): void {
+    if (Number.isFinite(ms)) this.clockMs = ms;
+    if (rate !== undefined && Number.isFinite(rate)) this.clockRate = rate;
+  }
+
+  /**
+   * Turn the world by hand. Turning it by an angle moves the clock by the time the body takes to
+   * rotate that far: a full turn of the Moon is a month, a full turn of the Earth is a day.
+   */
+  turnBy(angleRad: number): void {
+    if (!this.body) return;
+    this.clockMs += (angleRad / (Math.PI * 2)) * SPIN_PERIOD_S[this.body] * 1000;
+  }
+
+  /** The marker that points home is hidden while the camera is standing at home. */
+  showEarthMarker(on: boolean): void {
+    if (this.earthMarker) this.earthMarker.visible = on;
+  }
+
+  /** Direction from the planet to Earth at the moment shown, in world space (null when the planet is the Earth). */
+  earthDirection(target: THREE.Vector3): THREE.Vector3 | null {
+    if (!this.sky?.earth) return null;
+    return target.copy(toView(this.sky.earth)).normalize().applyQuaternion(this.root.getWorldQuaternion(new THREE.Quaternion()));
+  }
+
+  /** Is this ray on the planet? (Dragging the planet turns time; dragging empty space moves the camera.) */
+  planetHit(raycaster: THREE.Raycaster): boolean {
+    return this.mode === "orbit" && Boolean(this.planet) && raycaster.intersectObject(this.planet!.globe, false).length > 0;
+  }
+
+  /** What is true at the moment shown: is the spacecraft in sunlight, can it see Earth, is it day at the site. */
+  telemetry(): { sunlit: boolean; earthInView: boolean | null; earthDistanceKm: number; sunDistanceAu: number; siteSunElevationDeg: number | null; moonPhase: Sky["moonPhase"] } | null {
+    if (!this.sky || !this.body) return null;
+    const p = this.craft.position;
+    const sun = this.sunLocal;
+    const along = p.dot(sun);
+    const sunlit = !(along < 0 && p.clone().addScaledVector(sun, -along).length() < 1);
+    let earthInView: boolean | null = null;
+    if (this.sky.earth) {
+      const e = toView(this.sky.earth).normalize();
+      const t = -p.dot(e); // closest approach of the line of sight to the planet's centre
+      earthInView = !(t > 0 && p.clone().addScaledVector(e, t).length() < 1);
+    }
+    let siteSunElevationDeg: number | null = null;
+    if (this.siteMarker && this.planet) {
+      const up = this.siteMarker.position.clone().normalize().applyQuaternion(this.planet.globe.quaternion);
+      siteSunElevationDeg = (Math.asin(Math.max(-1, Math.min(1, up.dot(sun)))) * 180) / Math.PI;
+    }
+    return { sunlit, earthInView, earthDistanceKm: this.sky.earthDistanceKm, sunDistanceAu: this.sky.sunDistanceAu, siteSunElevationDeg, moonPhase: this.sky.moonPhase };
+  }
+
+  /** Show the mission on a given day after the mission date (the timeline and the flight-event list use this). */
   setPreviewDay(days: number | null): void {
+    this.setClock(this.baseMs + (days ?? 0) * 86400000);
     this.sunLocal.copy(this.sunBase);
     if (days) this.sunLocal.applyAxisAngle(ECLIPTIC_POLE, (days / 365.25) * Math.PI * 2);
+  }
+
+  private primed: THREE.Object3D[] = [];
+  /**
+   * Show every hidden object for one off-screen draw, then hide them again. A graphics driver
+   * finishes building a program the first time it is drawn with; doing that once up front keeps
+   * the first burn, shockwave or view switch from stalling a frame.
+   */
+  prime(on: boolean): void {
+    if (on) {
+      this.root.traverse((o) => {
+        if (!o.visible && !(o as THREE.Light).isLight) {
+          o.visible = true;
+          this.primed.push(o);
+        }
+      });
+    } else {
+      for (const o of this.primed) o.visible = false;
+      this.primed = [];
+    }
   }
 
   /** Flash the systems that were just recalculated (visible confirmation of a synchronised change). */
@@ -519,6 +673,19 @@ export class MissionScene {
     return o ? { componentId: o.userData.componentId as string, object: o } : null;
   }
 
+  /** Close-up mode: drop the beacon glow and name tag and part the ribbon around the spacecraft. */
+  setCloseUp(on: boolean): void {
+    this.closeUp = on;
+    this.applyCloseUp();
+  }
+
+  private applyCloseUp(): void {
+    for (const name of ["beacon", "craft-label"]) {
+      const o = this.craft.getObjectByName(name);
+      if (o) o.visible = !this.closeUp;
+    }
+  }
+
   /** Sun direction in the mission frame. */
   get sunDirection(): THREE.Vector3 {
     return this.sunLocal.clone();
@@ -535,12 +702,35 @@ export class MissionScene {
   update(dt: number): void {
     this.time += dt;
     const { a, b, c, q, m } = this.scratch;
+    // The clock drives everything that depends on when: the Sun's direction, how the world is turned, where home is.
+    if (this.body && this.clockStarted) {
+      this.clockMs += dt * 1000 * this.clockRate;
+      const sky = (this.sky = skyAt(this.body, this.clockMs));
+      this.sunLocal.copy(toView(sky.sun)).normalize();
+      if (this.planet) {
+        const target = toView(sky.primeMeridian);
+        const zero = onGlobe(0, 0);
+        this.planet.globe.rotation.y = Math.atan2(-target.z, target.x) - Math.atan2(-zero.z, zero.x);
+      }
+      if (this.earthMarker && sky.earth) this.earthMarker.position.copy(toView(sky.earth)).normalize().multiplyScalar(Math.max(2.2, this.extent * 1.5));
+    }
     const worldQuat = this.root.getWorldQuaternion(q);
     const sunWorld = a.copy(this.sunLocal).applyQuaternion(worldQuat);
     this.planet?.setSun(sunWorld);
     this.planet?.update(dt);
-    if (this.planet) this.planet.globe.rotation.y += dt * 0.006;
-    this.sunLight.position.copy(this.sunLocal).multiplyScalar(20);
+    // The shadow frustum hugs whatever hardware is on screen, so a small map stays sharp.
+    const orbiting = this.mode === "orbit";
+    const focus = orbiting ? this.craft.position : b.set(0, 0, 0);
+    const half = orbiting ? 0.26 : 2.4;
+    this.sunLight.target.position.copy(focus);
+    this.sunLight.position.copy(focus).addScaledVector(this.sunLocal, 20);
+    const shadowCamera = this.sunLight.shadow.camera;
+    if (shadowCamera.right !== half) {
+      shadowCamera.left = -half; shadowCamera.right = half; shadowCamera.top = half; shadowCamera.bottom = -half;
+      shadowCamera.near = 10; shadowCamera.far = 30;
+      shadowCamera.updateProjectionMatrix();
+      this.sunLight.shadow.normalBias = orbiting ? 0.0015 : 0.012;
+    }
     this.sun.position.copy(this.sunLocal).multiplyScalar(this.extent * 2.6);
     this.sun.scale.setScalar(this.extent * 0.55);
     if (this.host) {
@@ -558,10 +748,12 @@ export class MissionScene {
       tube.material.uniforms.uTime!.value = this.time;
       tube.material.uniforms.uFlash!.value = this.flash * 0.6 + (tube === this.orbitTube ? this.burn * 0.5 : 0);
       tube.material.uniforms.uSunLocal!.value.copy(this.sunLocal);
+      tube.material.uniforms.uGap!.value = tube === this.orbitTube && this.closeUp ? 1 : 0;
     }
 
     if (this.orbitPath.length > 1 && this.craftModel) {
-      // One orbit every 40 seconds of wall-clock time, regardless of the true period.
+      // The spacecraft keeps an easy-to-follow pace (one orbit in forty seconds) whatever the clock is doing:
+      // at a day per second its true motion would be a blur.
       this.craftPhase = (this.craftPhase + dt / 40) % 1;
       const f = this.craftPhase * this.orbitPath.length;
       const i = Math.floor(f) % this.orbitPath.length;
@@ -569,10 +761,13 @@ export class MissionScene {
       const p1 = this.orbitPath[(i + 1) % this.orbitPath.length]!;
       this.craft.position.lerpVectors(p0, p1, f - Math.floor(f));
       this.orbitTube!.material.uniforms.uHead!.value = this.craftPhase;
-      // Nadir-pointing attitude: instruments (+Z) at the planet, array axis (X) along the orbit normal.
+      // Nadir-pointing with yaw steering: instruments (+Z) at the planet, and the array axis (X) kept
+      // perpendicular to the Sun line so the single-axis array drives can face the cells at the Sun.
       const nadir = a.copy(this.craft.position).normalize().negate();
       const velocity = b.subVectors(p1, p0).normalize();
-      const normal = c.crossVectors(velocity, nadir).normalize();
+      const normal = c.crossVectors(this.sunLocal, nadir);
+      if (normal.lengthSq() < 1e-4) normal.crossVectors(velocity, nadir); // Sun on the nadir line: any yaw will do
+      normal.normalize();
       const up = velocity.crossVectors(nadir, normal).normalize();
       const model = this.craftModel;
       model.group.quaternion.setFromRotationMatrix(m.makeBasis(normal, up, nadir));
@@ -586,7 +781,7 @@ export class MissionScene {
       });
       const along = this.craft.position.dot(this.sunLocal);
       const eclipsed = along < 0 && b.copy(this.craft.position).addScaledVector(this.sunLocal, -along).length() < 1;
-      if (this.craftBeacon) (this.craftBeacon.material as THREE.SpriteMaterial).opacity = (eclipsed ? 0.2 : 0.5) + 0.12 * Math.sin(this.time * 3);
+      if (this.craftBeacon) (this.craftBeacon.material as THREE.SpriteMaterial).opacity = (eclipsed ? 0.15 : 0.38) + 0.1 * Math.sin(this.time * 3);
       if (model.plume) {
         const mat = model.plume.material as THREE.MeshBasicMaterial;
         mat.opacity = this.burn * (0.75 + 0.25 * Math.sin(this.time * 60));
@@ -614,7 +809,6 @@ export class MissionScene {
     }
 
     if (this.systemsView.visible) {
-      this.bus.children[0]!.rotation.y += dt * 0.12;
       const blink = Math.sin(this.time * 4) > 0.2;
       for (const led of this.leds) led.visible = blink;
       const from = a, to = b, mid = c;

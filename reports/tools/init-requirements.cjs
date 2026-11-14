@@ -1,0 +1,66 @@
+// Writes the requirements traceability table once. Statuses are then maintained with state.cjs.
+const fs = require("fs");
+const path = require("path");
+const ROOT = path.resolve(__dirname, "..", "..");
+const file = path.join(ROOT, "requirements.json");
+if (fs.existsSync(file) && !process.argv.includes("--force")) { console.log("requirements.json exists; use --force to rewrite"); process.exit(0); }
+const R = (id, section, requirement, where, userPath, verify, expected) => ({ id, section, requirement, where, userPath, verify, expected, actual: "", evidence: "", status: "NOT_STARTED" });
+const requirements = [
+  R("R-OPS-01", "§2", "A continuation mechanism that keeps this session working until 08:00 KST, honours a stop file, and is actually verified", ".claude/settings.json, .claude/nightshift-stop.cjs", "(operator) create NIGHTSHIFT_STOP to stop", "Pipe test of the hook for continue / other session / stop file; in-session probe that project hooks load", "Hook blocks a stop before the end time and lets it through with the stop file"),
+  R("R-OPS-02", "§3,§15", "Requirements traceability table and state files kept current", "requirements.json, WORK_STATE.json, WORK_LOG.jsonl, NIGHTSHIFT_BRIEF.md, docs/ADDED_DECISIONS.md", "-", "Files exist and are updated as work proceeds", "Every required item has a status and evidence"),
+  R("R-FLOW-01", "§4", "One connected play flow: goal → requirements → design → trade-offs → build/connect/control → test → fly/operate → faults → science result", "apps/web/app/mission/page.tsx, src/platform/sessions.ts", "Lobby → mission → define → design → My AI → Fly → Submit", "Browser E2E through the whole flow", "A crew can go from a new mission to a scored debrief"),
+  R("R-FLOW-02", "§4", "Adding an instrument ripples into power, mass, data and cost, and on into comms, launch and schedule", "src/state/recalc.ts", "Parts → Add → Connect; watch goals and limits", "Unit test + API test of derived results before/after", "Power load, mass, data, cost, launch margin and schedule all change"),
+  R("R-PKG-01", "§5", "A mission starts built: goals, limits, environment, parts, ports, lines, initial state, the problem, adjustable values with units and ranges", "src/game/scenarios.ts (generateMission → prewire), src/game/briefs.ts (kit), src/systems/graph.ts", "Create mission in lobby; open it", "Unit test: every scenario is wired, validated and playable at start", "Wiring check passes at start; kit lists levers and parts"),
+  R("R-PKG-02", "§5", "Mission package is validated after generation (schema, ids, units, connections, executability, goal logic)", "src/state/schema.ts parseMissionConfig, src/systems/graph.ts systemsIssues, tests/playability.test.ts", "-", "Unit tests", "Invalid packages are refused; every scenario/difficulty is finishable"),
+  R("R-PKG-03", "§5", "Different missions really differ in world, limits and rules", "src/game/scenarios.ts", "Create missions from different briefs", "Unit test + API: three scenarios, different bodies, catalogues, objectives, events", "Different central body, parts, goals, results"),
+  R("R-AI-01", "§6", "Each player has their own AI conversation context", "src/pipeline/service.ts conversation(), src/pipeline/requirements.ts", "My AI panel: ask, then follow up with 'do it'", "Unit test with a scripted model + live model dialogue", "Follow-ups resolve against that player's own earlier turns only"),
+  R("R-AI-02", "§6,§10", "A conversation with one's AI is private by default; shared-world changes are visible to all; the owner can share", "src/pipeline/privacy.ts, src/server/http.ts, src/server/collab.ts", "My AI → Share with crew", "API + WebSocket test with two accounts", "Other crew see only a stub until shared"),
+  R("R-AI-03", "§6", "The AI reads the live world (config, derived results, wiring, catalogue, goals) before answering", "src/pipeline/requirements.ts analyzeOnce, src/platform/sessions.ts aiContext", "Ask 'why is data not coming down?'", "Live model dialogue", "Answer cites current numbers"),
+  R("R-AI-04", "§6", "Hypotheses: sound → built and measured; wrong → explained with reasons and alternatives; outside the model → limits stated", "src/pipeline/requirements.ts, src/pipeline/answer.ts", "Ask 'if we had X could we Y?'", "Live model dialogue (E07, E08)", "No false success"),
+  R("R-AI-05", "§6", "'Created' means real object ids, applied changes and measured results; change summary and undo are available", "src/pipeline/answer.ts composeBuildReply, sessions.rollback", "My AI reply shows what changed; Log → roll back", "API test + browser", "Reply lists ids and before→after; rollback restores"),
+  R("R-AI-06", "§6", "On a validation failure the AI analyses the reason and retries", "src/pipeline/requirements.ts analyze (dry run + repair, max 2)", "-", "Unit test with a scripted model that first returns an invalid line", "Second attempt is accepted; third failure is reported honestly"),
+  R("R-BUILD-01", "§7", "Parts are executable components with id, type, ports, unit-typed properties, state, constraints, connections, history, provenance", "src/state/schema.ts, src/systems/graph.ts portsOf/describePart", "Select a part → part card", "Unit test + browser", "Ports and lines shown per part"),
+  R("R-BUILD-02", "§7", "Lines carry real flows (power W, data bit/s, control); incompatible ports are refused; undersized lines limit the part", "src/systems/graph.ts", "Part card → Connect; AI adds a line", "tests/systems.test.ts", "Unwired part does nothing; bad line rejected with reason; clipped flow"),
+  R("R-BUILD-03", "§7", "AI-generated control logic is new behaviour that actually runs and changes data/power results", "src/systems/controller.ts, src/systems/expr.ts, src/game/simulation.ts", "Ask AI for a controller → approve → Fly", "tests/systems.test.ts + live model", "Flight KPIs differ with the controller"),
+  R("R-BUILD-04", "§7", "Safety: schema/type/unit checks, bounded evaluation, no file/network/secret access, test before apply, atomic apply, rollback; no eval", "src/systems/expr.ts (own parser, bounded), src/pipeline/proposals.ts (flight test), src/state/store.ts", "-", "tests/systems.test.ts hostile expressions; tests/sandbox.test.ts", "Hostile input is rejected and the world is unchanged"),
+  R("R-SIM-01", "§8", "Results are computed by the authoritative engine, not by the language model", "src/state/recalc.ts, src/game/simulation.ts, src/game/scoring.ts", "-", "Code + tests", "LLM never sets a score"),
+  R("R-SIM-02", "§8", "Reproducible: same design, seed and events give the same flight", "src/game/simulation.ts, src/game/events.ts", "Fly twice", "tests/systems.test.ts, tests/game-design.test.ts", "Identical KPIs"),
+  R("R-SIM-03", "§8", "Shared simulation time: speed, pause, step, re-run are shared by the crew", "apps/web/components/MissionClock.tsx, src/server/collab.ts clock relay", "Clock deck", "Browser E2E with two clients", "Both clients show the same moment"),
+  R("R-SIM-04", "§8", "Save and compare designs before/after under the same conditions; failed hypotheses are kept with reasons", "src/platform/sessions.ts saveDesign/compare, hypotheses log", "Designs tab; Crew log", "API test + browser", "Comparison table; refused ideas listed with reasons"),
+  R("R-SIM-05", "§8", "Mission success and its evidence are shown first; the score is secondary; game assumptions are labelled", "apps/web/components (MissionOutcome)", "Top of the left column; debrief", "Browser", "Success conditions with evidence before points"),
+  R("R-XR-01", "§9", "Web and MR share one mission, objects, wiring and simulation", "apps/web/lib/xr/workspace.ts", "Enter XR", "IWER emulator E2E (not a physical headset)", "Changes cross both ways"),
+  R("R-XR-02", "§9", "Personal view (camera) is not shared; design state is", "apps/web/lib/collab.ts", "Rotate the view in one client", "Browser E2E", "Other client's camera does not move"),
+  R("R-XR-03", "§9", "Verified on a physical MR headset", "-", "Quest browser", "Needs hardware", "-"),
+  R("R-MP-01", "§10", "Up to four players: join, leave, reconnect with state restored", "src/server/collab.ts, src/platform/sessions.ts", "Lobby → join", "tests/platform.test.ts + four-client run", "Fifth is refused; reconnect restores"),
+  R("R-MP-02", "§10", "Ordering, versions, duplicate protection, conflict handling, AI re-validation on a moved version", "src/state/store.ts, src/pipeline/proposals.ts", "-", "tests/platform.test.ts", "Stale edits rejected; proposals rebased"),
+  R("R-MP-03", "§10", "Sync latency and state equality measured across four clients", "reports/tools/fourclients.mjs", "-", "Measured run", "Latency numbers and identical state hashes recorded"),
+  R("R-MP-04", "§10", "History of who changed what, and undo", "src/state/store.ts, audit", "Log tab", "tests/platform.test.ts", "History lists author and summary; rollback works"),
+  R("R-UX-01", "§11", "A newcomer sees the mission, what is wrong, what can be changed, what to ask, what a change did, and the end condition", "apps/web/components/MissionProblem.tsx, MissionPanels.tsx", "Open a mission", "Browser screenshots", "All six are on screen without digging"),
+  R("R-UX-02", "§11", "No dead buttons, unexplained numbers, unexplained rotation or fake progress", "apps/web", "-", "Browser pass + console error check", "No console errors; states are real"),
+  R("R-SVC-01", "§14", "Accounts/API/device survey; .env.example and README match the code; no secrets in repo, bundle, logs or report", ".env.example, README.md, report", "-", "grep for secrets; read config code", "Table in the report"),
+  R("R-DOC-01", "§13", "Autonomous additions recorded with reason, alternatives, impact, verification", "docs/ADDED_DECISIONS.md", "-", "File review", "-"),
+  R("R-RPT-01", "§16", "Final report as .md and a rendered, checked .pdf with Korean text", "reports/Pinous_Final_Development_Report_2026-11-15.{md,pdf}", "-", "Render and inspect pages", "Readable PDF, no clipped tables"),
+  ...[
+    ["E01", "A new mission arrives with environment, systems, limits and goals built"],
+    ["E02", "The real UI takes a crew from design through operation to evaluation"],
+    ["E03", "Selecting a part shows its real properties, connections, state and meaning"],
+    ["E04", "The AI reads the current world and explains a cause"],
+    ["E05", "Different phrasings create new parts, lines and control functions"],
+    ["E06", "Generated control logic runs and the system result changes"],
+    ["E07", "A wrong hypothesis gets reasons and alternatives, never a false success"],
+    ["E08", "A hypothesis outside the model is answered with the model's limits"],
+    ["E09", "Adding equipment changes cost, mass, power, comms and mission result"],
+    ["E10", "Four independent clients see the same state and result"],
+    ["E11", "A Web change appears in MR and an MR change appears on the Web"],
+    ["E12", "Rotating one's own view does not disturb others or the mission"],
+    ["E13", "Concurrent edits, duplicate requests, reconnect and server restart recover as designed"],
+    ["E14", "Bad code, endless loops and forbidden access cannot damage the shared world"],
+    ["E15", "AI/API errors, network loss and failed generation can be retried and recovered"],
+    ["E16", "Designs can be compared before/after under the same conditions and the result reproduced"],
+    ["E17", "A mission with different conditions also generates, plays and evaluates"],
+    ["E18", "The final build starts from a clean procedure and the core play is reproduced"],
+    ["E19", "The final PDF is generated, opened and checked"],
+  ].map(([id, text]) => R(id, "§12", text, "", "", "Recorded scenario run", "")),
+];
+fs.writeFileSync(file, JSON.stringify({ project: "Mission Forge (Pinous) — NASA Space Apps 2026, Space Mission Design Game", statuses: ["NOT_STARTED", "IN_PROGRESS", "IMPLEMENTED_NOT_VERIFIED", "FAIL", "BLOCKED_EXTERNAL", "PASS"], updatedAt: "", requirements }, null, 2) + "\n");
+console.log(requirements.length + " requirements written");

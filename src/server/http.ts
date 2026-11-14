@@ -25,6 +25,8 @@ import { type MissionSession, SessionError } from "../platform/sessions.js";
 import type { CapabilityCategory } from "../registry/capability.js";
 import { executeDirect } from "../registry/direct.js";
 import { CollabHub } from "./collab.js";
+import { redacted, visibleTo } from "../pipeline/privacy.js";
+import { readableBy } from "../memory/memory.js";
 
 class HttpError extends Error {
   constructor(
@@ -195,7 +197,7 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
     if (route === "GET /health") return json(200, { ok: true, service: "mission-platform", secure });
     if (route === "GET /reference") return json(200, { lifeCycle: LIFE_CYCLE_PHASES, segments: MISSION_SEGMENTS, conceptMaturityLevels: CONCEPT_MATURITY_LEVELS, disciplines: DISCIPLINES, pointDesignMargins: POINT_DESIGN_MARGINS });
     if (route === "GET /leaderboard") {
-      return json(200, sessions.leaderboard({ ...(url.searchParams.get("scenario") ? { scenarioId: url.searchParams.get("scenario")! } : {}), ...(url.searchParams.get("difficulty") ? { difficulty: url.searchParams.get("difficulty")! } : {}) }));
+      return json(200, sessions.leaderboard({ ...(url.searchParams.get("scenario") ? { scenarioId: url.searchParams.get("scenario")! } : {}), ...(url.searchParams.get("difficulty") ? { difficulty: url.searchParams.get("difficulty")! } : {}), ...(url.searchParams.get("brief") ? { briefId: url.searchParams.get("brief")! } : {}) }));
     }
     // NASA imagery and terrain: read-only, allow-listed, cached. Public so the landing page can use them.
     if (resource === "imagery" && method === "GET") {
@@ -230,6 +232,17 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
         throw err;
       }
       throw new HttpError(404, "Not found");
+    }
+    if (route === "GET /briefs") {
+      const stats = sessions.briefStats();
+      return json(200, { status: platform.briefs.status(), briefs: platform.briefs.list(30).map((b) => ({ ...b, crews: stats[b.id]?.crews ?? 0, best: stats[b.id]?.best ?? null })) });
+    }
+    if (route === "POST /briefs/generate") {
+      const account = requireAccount();
+      const body = await readJson(req);
+      const made = await platform.briefs.generate(typeof body.count === "number" ? body.count : 3);
+      audit.record({ actor: account.id, action: "briefs.generate", detail: { count: made.length, origin: made[0]?.origin } });
+      return json(201, { status: platform.briefs.status(), briefs: made });
     }
     if (route === "GET /scenarios") {
       return json(200, SCENARIOS.map((s) => ({ id: s.id, title: s.title, tagline: s.tagline, destination: s.destination, briefing: s.briefing, scienceQuestions: s.scienceQuestions, references: s.references, objectives: s.objectives.map((o) => ({ id: o.id, title: o.title, description: o.description, category: o.category, weight: o.weight })), disciplines: DISCIPLINES.filter((d) => s.disciplines.includes(d.id)), catalogSize: s.catalog.length })));
@@ -320,13 +333,14 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
       if (route === "GET /research") {
         const kind = url.searchParams.get("kind") as MemoryKind | null;
         const q = url.searchParams.get("q")?.trim();
-        const all = platform.memory.all().filter((r) => !kind || r.kind === kind);
-        const records = q ? platform.memory.search(q, { limit: 60, ...(kind ? { kinds: [kind] } : {}) }).map((m) => ({ ...m.record, score: m.score })) : all.slice(-80).reverse();
+        // Records of someone's private conversation with their AI are listed only for that person.
+        const all = platform.memory.all().filter((r) => (!kind || r.kind === kind) && readableBy(r, account.id));
+        const records = q ? platform.memory.search(q, { limit: 60, ...(kind ? { kinds: [kind] } : {}) }).filter((m) => readableBy(m.record, account.id)).map((m) => ({ ...m.record, score: m.score })) : all.slice(-80).reverse();
         return json(200, { total: all.length, records: records.map(({ data: _d, ...r }) => r) });
       }
       if (id && !action && method === "GET") {
         const record = platform.memory.get(id);
-        if (!record) throw new HttpError(404, "Record not found");
+        if (!record || !readableBy(record, account.id)) throw new HttpError(404, "Record not found");
         return json(200, record);
       }
       if (id && action === "review" && method === "POST") {
@@ -361,6 +375,11 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
       }
     }
 
+    if (route === "GET /designs") {
+      requireAccount();
+      return json(200, sessions.listDesigns({ ...(url.searchParams.get("scenario") ? { scenarioId: url.searchParams.get("scenario")! } : {}), ...(url.searchParams.get("brief") ? { briefId: url.searchParams.get("brief")! } : {}) }));
+    }
+
     // ---------- Mission sessions ----------
     if (resource === "sessions") {
       const account = requireAccount();
@@ -392,7 +411,7 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
         return json(result.ok ? 200 : result.reason === "conflict" || result.reason === "locked" || result.reason === "frozen" ? 409 : result.reason === "forbidden" ? 403 : 422, result.ok ? { ok: true, version: result.version.version } : result);
       }
       if (action === "requests") {
-        if (!subId && method === "GET") return json(200, session.requests.list().map(({ trace, ...r }) => ({ ...r, traceLength: trace.length })));
+        if (!subId && method === "GET") return json(200, session.requests.list().map((r) => (visibleTo(r, account.id) ? (({ trace, ...rest }) => ({ ...rest, traceLength: trace.length }))(r) : redacted(r))));
         if (!subId && method === "POST") {
           const body = await readJson(req);
           if (typeof body.text !== "string" || !body.text.trim()) throw new HttpError(400, "text is required");
@@ -401,6 +420,15 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
           return json(202, body.wait === true ? await session.requests.wait(record.id) : record);
         }
         const record = subId ? session.requests.get(subId) : undefined;
+        if (record && !visibleTo(record, account.id)) throw new HttpError(403, "This is a private conversation between a crew member and their AI. They can share it with the crew.");
+        if (record && subAction === "share" && method === "POST") {
+          const body = await readJson(req);
+          try {
+            return json(200, session.requests.share(record.id, account.id, body.shared !== false));
+          } catch (err) {
+            throw new HttpError(403, (err as Error).message);
+          }
+        }
         if (!record) throw new HttpError(404, "Request not found");
         if (!subAction && method === "GET") return json(200, record);
         if (subAction === "clarify" && method === "POST") {
@@ -421,6 +449,12 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
         const record = session.addFromCatalog(account.id, body.itemId, body.target === "rover" ? "rover" : "spacecraft");
         return json(202, body.wait === true ? await session.requests.wait(record.id) : record);
       }
+      if (action === "connect" && method === "POST") {
+        const body = await readJson(req);
+        if (typeof body.componentId !== "string") throw new HttpError(400, "componentId is required");
+        const record = session.connectPart(account.id, body.componentId);
+        return json(202, body.wait === true ? await session.requests.wait(record.id) : record);
+      }
       if (action === "proposals") {
         if (!subId && method === "GET") return json(200, session.proposals.list());
         const proposal = subId ? session.proposals.get(subId) : undefined;
@@ -428,7 +462,7 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
         if (!subAction && method === "GET") return json(200, proposal);
         if ((subAction === "approve" || subAction === "reject") && method === "POST") {
           const body = await readJson(req);
-          const result = await session.decide(account.id, proposal.id, subAction, typeof body.reason === "string" ? body.reason.slice(0, 500) : "");
+          const result = await session.decide(account.id, proposal.id, subAction, typeof body.reason === "string" ? body.reason.slice(0, 500) : "", body.acceptViolations === true);
           return json(200, { proposal: result.proposal, version: result.version?.version });
         }
       }
@@ -449,6 +483,44 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
         return json(202, body.wait === true ? await session.requests.wait(record.id) : record);
       }
       if (action === "trajectories" && method === "DELETE" && subId) return json(202, session.removeTrajectory(account.id, subId));
+      if (action === "role" && method === "POST") {
+        const body = await readJson(req);
+        return json(200, { roleClaims: session.claimRole(account.id, typeof body.seat === "string" ? body.seat : null) });
+      }
+      if (action === "at" && method === "GET") return json(200, session.at(account.id, url.searchParams.get("time") ?? ""));
+      if (action === "define" && method === "POST") return json(200, { charter: session.defineMission(account.id, await readJson(req)), game: session.meta.game });
+      if (action === "designs") {
+        if (!subId && method === "GET") return json(200, { saved: session.meta.game.savedDesigns ?? [], shared: sessions.listDesigns(session.sandbox ? {} : { scenarioId: session.meta.scenarioId }) });
+        const body = await readJson(req);
+        if (!subId && method === "POST") return json(201, session.saveDesign(account.id, String(body.name ?? "")));
+        if (subId === "share" && method === "POST") {
+          const shared = sessions.shareDesign(session.exportDesign(account.id, String(body.name ?? ""), typeof body.version === "number" ? body.version : undefined));
+          audit.record({ actor: account.id, action: "design.share", sessionId: session.meta.id, detail: { designId: shared.id, version: shared.version } });
+          const { config: _config, ...summary } = shared;
+          return json(201, summary);
+        }
+        if (subId === "import" && method === "POST") {
+          const design = sessions.design(String(body.designId ?? ""));
+          if (!design) throw new HttpError(404, "Shared design not found");
+          const result = session.importDesign(account.id, design);
+          return json(result.ok ? 200 : result.reason === "forbidden" ? 403 : result.reason === "frozen" ? 409 : 422, result.ok ? { ok: true, version: result.version.version } : result);
+        }
+      }
+      if (action === "compare" && method === "GET") {
+        // A reference is "head", a version number, or "shared:<design id>".
+        const resolve = (ref: string | null): { label: string; config: never; derived?: never; metrics?: never } => {
+          if (ref?.startsWith("shared:")) {
+            const design = sessions.design(ref.slice(7));
+            if (!design) throw new HttpError(404, "Shared design not found");
+            return { label: `${design.name} · ${design.by}`, config: design.config as never, metrics: design.metrics as never };
+          }
+          const version = !ref || ref === "head" ? session.store.head() : session.store.get(Number(ref));
+          if (!version) throw new HttpError(404, `Version ${ref} not found`);
+          const saved = session.meta.game.savedDesigns?.find((d) => d.version === version.version);
+          return { label: `${saved ? `${saved.name} · ` : ""}v${version.version}${version.version === session.store.head().version ? " (current)" : ""}`, config: version.config as never, derived: version.derived as never };
+        };
+        return json(200, session.compare(account.id, resolve(url.searchParams.get("a")), resolve(url.searchParams.get("b"))));
+      }
       if (action === "simulate" && method === "POST") return json(200, session.runSimulation(account.id));
       if (action === "trade" && method === "POST") return json(200, await session.runTradeStudy(account.id, (await readJson(req)) as never));
       if (action === "notes" && method === "POST") {
@@ -462,7 +534,7 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
       if (action === "submit" && method === "POST") {
         const result = session.submit(account.id);
         sessions.recordSubmission(result.submission);
-        return json(200, result);
+        return json(200, { ...result, standing: sessions.standing(result.submission) });
       }
       if (action === "members" && subId && method === "POST") {
         const body = await readJson(req);

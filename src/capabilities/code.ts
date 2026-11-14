@@ -65,30 +65,54 @@ export function codeCapabilities(deps: { llm: LlmService }): Capability[] {
         const stateOutline = config.ok
           ? JSON.stringify({ ...config.config, assets: undefined, scripts: undefined, scene: undefined })
           : "(unavailable)";
-        const generated = await deps.llm.structured({
-          system: SYSTEM,
-          schema: GeneratedModule,
-          signal: ctx.signal,
-          prompt: [
-            `Task: ${input.task}`,
-            `Permissions granted to the module: ${input.permissions.join(", ")}`,
-            `Derived result node ids: ${Object.keys(ctx.mission.derived).join(", ")}`,
-            `Current mission configuration (JSON):\n${stateOutline}`,
-            input.existingSource ? `Modify this existing module:\n${input.existingSource}` : "",
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
-        });
+        // The module is checked as it is written: what the validator or a sandbox run rejects goes back to the model, twice at most.
+        let generated!: z.infer<typeof GeneratedModule>;
         let testInput: Record<string, unknown> = {};
-        try {
-          const parsed: unknown = JSON.parse(generated.testInputJson);
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) testInput = parsed as Record<string, unknown>;
-        } catch {
-          ctx.log("Model supplied an unparsable test input; using {}");
+        let feedback = "";
+        let repairs = 0;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          generated = await deps.llm.structured({
+            system: SYSTEM,
+            schema: GeneratedModule,
+            signal: ctx.signal,
+            prompt: [
+              `Task: ${input.task}`,
+              `Permissions granted to the module: ${input.permissions.join(", ")}`,
+              `Derived result node ids: ${Object.keys(ctx.mission.derived).join(", ")}`,
+              `Current mission configuration (JSON):
+${stateOutline}`,
+              input.existingSource ? `Modify this existing module:
+${input.existingSource}` : "",
+              feedback ? `Your previous module was rejected. Fix exactly this and return the whole corrected module:
+${feedback}
+
+Previous module:
+${generated?.source ?? ""}` : "",
+            ]
+              .filter(Boolean)
+              .join("\n\n"),
+          });
+          testInput = {};
+          try {
+            const parsed: unknown = JSON.parse(generated.testInputJson);
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) testInput = parsed as Record<string, unknown>;
+          } catch {
+            ctx.log("Model supplied an unparsable test input; using {}");
+          }
+          const checked = validateModuleSource(generated.source);
+          if (!checked.ok || !checked.compiledJs) {
+            feedback = [...checked.policyViolations, ...checked.diagnostics].slice(0, 12).join("\n");
+          } else {
+            const run = await runInSandbox({ compiledJs: checked.compiledJs, permissions: input.permissions, config: ctx.draft.workingConfig(), derived: ctx.mission.derived, input: testInput });
+            if (run.ok) { repairs = attempt; break; }
+            feedback = `It type-checks, but running it in the sandbox with your own test input failed: ${run.error}`;
+          }
+          ctx.log(`Generated module rejected (attempt ${attempt + 1}): ${feedback.slice(0, 300)}`);
+          repairs = attempt + 1;
         }
         return {
           output: { source: generated.source, explanation: generated.explanation, testInput, permissions: input.permissions, modelId: deps.llm.modelId },
-          assumptions: ["Source code is model-generated and has not been validated at this step"],
+          assumptions: ["Source code is model-generated; it was checked while it was written" + (repairs ? ` (corrected ${repairs} time(s) after the validator or sandbox rejected it)` : "") + ", and is validated again as its own step"],
           modelId: deps.llm.modelId,
         };
       },

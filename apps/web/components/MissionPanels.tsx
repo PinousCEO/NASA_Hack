@@ -2,9 +2,14 @@
 /** HUD panels of the mission workspace. All state comes from the authoritative snapshot; every action goes to the server. */
 import { useEffect, useRef, useState } from "react";
 import { api, type Evaluation, fmt, type Presence, type Snapshot } from "@/lib/api";
+import { bus } from "@/lib/bus";
 import type { Collab, Patch } from "@/lib/collab";
 import { BODY_RADIUS_KM } from "@/lib/scene/MissionScene";
-import { SiteSurvey, TrajectoryPanel } from "./MissionExtras";
+import { Debrief, LaunchPicker, OrbitPresets, SiteSurvey, TrajectoryPanel } from "./MissionExtras";
+import { CharterCard, FlightEvents, SandboxLimits } from "./MissionGame";
+import { MissionGuide } from "./MissionGuide";
+import { Modal } from "./Modal";
+import { ProblemPanel } from "./MissionProblem";
 
 export interface Ctx {
   sid: string;
@@ -63,7 +68,7 @@ export function Spark({ series, height = 90, zero = false, marker }: { series: {
   );
 }
 
-function ParamSlider({ c, label, path, value, min, max, step, unit, toPatches }: { c: Ctx; label: string; path: string; value: number; min: number; max: number; step: number; unit: string; toPatches(v: number): Patch[] }) {
+export function ParamSlider({ c, label, path, value, min, max, step, unit, toPatches }: { c: Ctx; label: string; path: string; value: number; min: number; max: number; step: number; unit: string; toPatches(v: number): Patch[] }) {
   const [draft, setDraft] = useState<number | null>(null);
   const lockedBy = Object.entries(c.snap.locks).find(([p, owner]) => owner !== c.accountId && (p === path || p.startsWith(`${path}.`) || path.startsWith(`${p}.`)))?.[1];
   const shown = draft ?? value;
@@ -78,7 +83,7 @@ function ParamSlider({ c, label, path, value, min, max, step, unit, toPatches }:
   return (
     <label className="field" title={lockedBy ? `${memberName(c, lockedBy)} is adjusting this` : undefined}>
       <span className="row between"><span>{label}{lockedBy && <span className="chip warn" style={{ marginLeft: 8 }}>{memberName(c, lockedBy)} editing</span>}</span><b className="mono" style={{ color: draft !== null ? "var(--amber)" : "var(--text)" }}>{fmt(shown)} {unit}</b></span>
-      <input type="range" min={min} max={max} step={step} value={shown} disabled={!canEdit(c) || Boolean(lockedBy)}
+      <input type="range" aria-label={label} title={lockedBy ? `${memberName(c, lockedBy)} is adjusting this right now` : !canEdit(c) ? (c.snap.game.submitted ? "The mission has been submitted; the design is frozen" : "Viewers can look but not change the design") : `${label} (${unit})`} min={min} max={max} step={step} value={shown} disabled={!canEdit(c) || Boolean(lockedBy)}
         onPointerDown={() => { void c.collab.lock(path, true); c.collab.presence({ focus: path }, true); }}
         onChange={(e) => setDraft(Number(e.target.value))} onPointerUp={release} onKeyUp={release} onBlur={release} />
     </label>
@@ -101,32 +106,38 @@ function NumberField({ c, label, value, unit, onCommit }: { c: Ctx; label: strin
 }
 
 // ---------- Objectives (left column) ----------
-export function ObjectivesPanel({ c }: { c: Ctx }) {
+export function ObjectivesPanel({ c, onDefine, openTab }: { c: Ctx; onDefine(): void; openTab(tab: string): void }) {
   const ev = c.snap.evaluation;
   const fails = c.snap.checks.filter((x) => x.status !== "pass");
   return (
     <>
-      <div>
-        <h3 className="eyebrow" style={{ marginBottom: 8 }}>Mission objectives</h3>
+      <ProblemPanel c={c} onDefine={onDefine} />
+      {c.snap.game.charter && <CharterCard c={c} onEdit={onDefine} />}
+      <details className="fold" open>
+        <summary>Goals · {ev.objectives.filter((o) => o.achieved >= 1).length} of {ev.objectives.length} met</summary>
         {(["science", "engineering", "programmatic"] as const).map((cat) => (
-          <div key={cat} style={{ marginBottom: 10 }}>
-            <div className="row between mono dim" style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase" }}><span>{cat}</span><span>{ev.categories[cat]!.earned.toFixed(0)} / {ev.categories[cat]!.possible}</span></div>
+          <div key={cat} style={{ marginBottom: 8 }}>
+            <div className="row between mono dim" style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase" }}><span>{cat}</span><span>{ev.categories[cat]!.earned.toFixed(0)} / {+ev.categories[cat]!.possible.toFixed(1)}</span></div>
             {ev.objectives.filter((o) => o.category === cat).map((o) => (
-              <div key={o.id} className="objective" title={o.description}>
-                <div className="row between"><span style={{ fontSize: 13 }}>{o.title}</span><span className="mono dim" style={{ fontSize: 11 }}>{o.value === null ? "–" : `${fmt(o.value)}${o.unit ? ` ${o.unit}` : ""}`}</span></div>
+              <div key={o.id} className="objective" title={o.description} tabIndex={0}>
+                <div className="row between"><span style={{ fontSize: 13 }}>{o.title}{(o as any).primary && <span className="chip info" style={{ marginLeft: 6 }}>primary ×1.5</span>}{(o as any).stretch && <span className="chip" style={{ marginLeft: 6 }}>stretch</span>}</span><span className="mono dim" style={{ fontSize: 11 }}>{o.value === null ? "–" : `${fmt(o.value)}${o.unit ? ` ${o.unit}` : ""}`}</span></div>
                 <div className={`bar ${o.achieved >= 1 ? "ok" : o.achieved > 0 ? "warn" : "bad"}`} style={{ margin: "5px 0 3px" }}><i style={{ width: `${Math.max(3, o.achieved * 100)}%` }} /></div>
-                <div className="faint" style={{ fontSize: 11 }}>{o.feedback}</div>
+                <div className="faint" style={{ fontSize: 11 }}>{o.description} {o.feedback}</div>
               </div>
             ))}
           </div>
         ))}
-      </div>
-      <div>
-        <h3 className="eyebrow" style={{ marginBottom: 8 }}>Engineering constraints</h3>
-        {fails.length === 0 ? <span className="chip ok"><span className="dot" />all {c.snap.checks.length} constraints satisfied</span> : fails.map((x) => (
-          <div key={x.id} className="objective"><span className={`chip ${tone(x.status)}`}>{x.status}</span> <span style={{ fontSize: 13 }}>{x.description}</span><div className="faint" style={{ fontSize: 11 }}>{x.detail}</div></div>
-        ))}
-      </div>
+      </details>
+      {fails.length > 0 && (
+        <details className="fold" open>
+          <summary>Limits · {fails.filter((x) => x.status === "fail").length} broken</summary>
+          {fails.map((x) => <div key={x.id} className="objective"><span className={`chip ${tone(x.status)}`}>{x.status}</span> <span style={{ fontSize: 13 }}>{x.description}</span><div className="faint" style={{ fontSize: 11, display: "block" }}>{x.detail}</div></div>)}
+        </details>
+      )}
+      <details className="fold">
+        <summary>Mission process · NASA design steps</summary>
+        <MissionGuide c={c} onDefine={onDefine} openTab={openTab} />
+      </details>
     </>
   );
 }
@@ -156,8 +167,11 @@ export function DesignPanel({ c }: { c: Ctx }) {
   };
   return (
     <div className="stack">
+      <SandboxLimits c={c} />
+      {c.snap.session.mode === "sandbox" && <hr className="hairline" />}
       <div className="stack">
         <h3 className="eyebrow">Orbit · flight dynamics</h3>
+        <OrbitPresets c={c} radiusKm={R} />
         <ParamSlider c={c} label="Altitude" path="orbit.semiMajorAxisKm" value={Math.round(cfg.orbit.semiMajorAxisKm - R)} min={cfg.centralBody === "earth" ? 200 : 20} max={cfg.centralBody === "earth" ? 2000 : 1000} step={5} unit="km" toPatches={(v) => [{ op: "set", path: "orbit.semiMajorAxisKm", value: R + v }]} />
         <ParamSlider c={c} label="Inclination" path="orbit.inclinationDeg" value={cfg.orbit.inclinationDeg} min={0} max={180} step={1} unit="°" toPatches={(v) => [{ op: "set", path: "orbit.inclinationDeg", value: v }]} />
         <ParamSlider c={c} label="Ascending node" path="orbit.raanDeg" value={cfg.orbit.raanDeg} min={0} max={359} step={1} unit="°" toPatches={(v) => [{ op: "set", path: "orbit.raanDeg", value: v }]} />
@@ -165,6 +179,8 @@ export function DesignPanel({ c }: { c: Ctx }) {
           <input className="input mono" type="date" value={cfg.missionTime.slice(0, 10)} disabled={!canEdit(c)} onChange={(e) => e.target.value && void commit(c, [{ op: "set", path: "missionTime", value: `${e.target.value}T00:00:00Z` }], `Mission date → ${e.target.value}`)} />
         </label>
       </div>
+      <hr className="hairline" />
+      <LaunchPicker c={c} />
       <hr className="hairline" />
       <h3 className="eyebrow">Spacecraft · {comps.length} components</h3>
       {comps.map((comp) => {
@@ -175,7 +191,7 @@ export function DesignPanel({ c }: { c: Ctx }) {
               <span><span className="chip info">{(comp.kind ?? comp.type).replace(/_/g, " ")}</span> <b style={{ fontSize: 13 }}>{comp.name}</b></span>
               {canEdit(c) && <button className="btn sm danger" onClick={(e) => { e.stopPropagation(); remove(comp); }} title="Remove component">✕</button>}
             </div>
-            <div className="mono dim" style={{ fontSize: 11, marginTop: 4 }}>{fmt(comp.massKg)} kg · ${fmt(comp.costMusd)}M{comp.powerW !== undefined ? ` · ${comp.powerW} W` : ""}{focus ? ` · ${focus.displayName} is looking` : ""}</div>
+            <div className="mono dim" style={{ fontSize: 11, marginTop: 4 }}>{fmt(comp.massKg)} kg · ${fmt(comp.costMusd)}M{comp.powerW !== undefined ? ` · ${comp.powerW} W` : ""}{comp.type === "adcs" ? ` · holds ${comp.stabilityArcsec}″` : ""}{comp.type === "computer" ? ` · ${comp.compressionRatio}:1 · +${comp.storageGb} Gb` : ""}{focus ? ` · ${focus.displayName} is looking` : ""}</div>
             {c.selected === comp.id && (
               <div className="row wrap" style={{ marginTop: 8 }} onClick={(e) => e.stopPropagation()}>
                 {(editable[comp.type] ?? []).map(([key, label, unit]) => (
@@ -207,75 +223,159 @@ export function DesignPanel({ c }: { c: Ctx }) {
   );
 }
 
-// ---------- AI runtime builder ----------
+/** What the AI found, in words, with the results it rests on. */
+export function AnswerBlock({ answer }: { answer: any }) {
+  const sources = [...new Set((answer.facts as any[]).map((f) => f.source))];
+  return (
+    <div className="answer">
+      <div className="k">Answer</div>
+      <p>{answer.text}</p>
+      {answer.facts.length > 0 && (
+        <details>
+          <summary>The numbers behind it · {answer.facts.length}</summary>
+          <table className="data"><tbody>{answer.facts.map((f: any, i: number) => <tr key={i}><td>{f.label}</td><td className="mono">{f.value}</td></tr>)}</tbody></table>
+        </details>
+      )}
+      <div className="faint" style={{ fontSize: 10.5, marginTop: 6 }}>{sources.length > 0 ? `Numbers from ${sources.join(", ")}. ` : ""}{answer.wording === "language_model" ? `Worded by ${answer.modelId} — check the numbers, not the phrasing.` : "Assembled from the results."}</div>
+    </div>
+  );
+}
+
+// ---------- My AI: a conversation ----------
+const VERDICT: Record<string, [string, string]> = {
+  answer: ["Answer", "info"], explained: ["Explained", "info"], conditional: ["Could work, if…", "warn"], refuted: ["Does not hold", "bad"], outside_model: ["Outside what the models cover", "warn"], built: ["Built · tested", "ok"], built_breaks_limit: ["Built · breaks a limit", "warn"], cannot: ["Not possible", "bad"], needs_input: ["Needs your answer", "warn"],
+};
+const WORKING = ["queued", "analyzing", "planning", "executing"];
+
+/**
+ * Each crew member talks to their own AI. Ask it how something works, or think aloud — "if we
+ * had X, couldn't we solve Y?". When the idea holds up it builds the thing in a test copy,
+ * measures what changes and says so; when it does not, it says why.
+ */
 export function AiPanel({ c }: { c: Ctx }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<any>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [whose, setWhose] = useState<"mine" | "crew">("mine");
+  const [view, setView] = useState<"all" | "built" | "failed">("all");
+  const input = useRef<HTMLTextAreaElement>(null);
+  // Another panel can hand a question over (a broken limit, a part that was clicked).
+  useEffect(() => bus.listen("ask", (t) => { setText(String(t)); setWhose("mine"); setTimeout(() => input.current?.focus(), 60); }), []);
   const send = async (t: string): Promise<void> => {
     if (!t.trim()) return;
     setBusy(true);
     try {
       await api("POST", `/api/sessions/${c.sid}/requests`, { text: t });
       setText("");
+      setWhose("mine");
       c.reloadLists();
     } catch (err) { c.toast((err as Error).message, "bad"); }
     setBusy(false);
   };
-  const decide = async (id: string, action: "approve" | "reject"): Promise<void> => {
-    const reason = action === "reject" ? (window.prompt("Reason for rejecting:") ?? "") : "Approved in workspace";
-    try { await api("POST", `/api/sessions/${c.sid}/proposals/${id}/${action}`, { reason }); c.reloadLists(); } catch (err) { c.toast((err as Error).message, "warn"); }
+  const decide = async (id: string, action: "approve" | "reject", acceptViolations = false): Promise<void> => {
+    const reason = action === "reject" ? (window.prompt("Reason for rejecting:") ?? "") : acceptViolations ? "Accepted in workspace with engineering limits still to fix" : "Approved in workspace";
+    try { await api("POST", `/api/sessions/${c.sid}/proposals/${id}/${action}`, { reason, acceptViolations }); c.reloadLists(); } catch (err) { c.toast((err as Error).message, "warn"); }
   };
-  const examples = ["Set orbit altitude to 50 km", "Add a 1.5 m2 solar panel", "Compute the link budget", "Create a 3D model of a star tracker telescope with a radiator", "Simulate the battery over 10 orbits", "Can the rover climb a 20 deg slope?", "Where is Mars?"];
-  const pending = c.proposals.filter((p) => p.status === "awaiting_approval");
+  const broken = c.snap.checks.find((x) => x.status === "fail");
+  const starters = [
+    ...(broken ? [`Why is "${broken.description}" failing, and what could fix it?`] : []),
+    "If we had a bigger antenna, could we send more data home?",
+    "What lines does a camera need before it can work?",
+    "Make a controller: when the battery runs low, run the instruments a fifth of the time until power is back",
+    "Build a radiator panel to keep the battery cool",
+    "Would flying lower give sharper measurements? What would it cost?",
+    "How much power do we have to spare?",
+  ];
+  const didNotHold = (r: any): boolean => ["refuted", "outside_model", "cannot"].includes(r.answer?.verdict) || ["infeasible", "rejected"].includes(r.status);
+  const list = c.requests.filter((r) => (whose === "crew" || r.user?.id === c.accountId) && (view === "all" || (view === "failed" ? didNotHold(r) : ["built", "built_breaks_limit"].includes(r.answer?.verdict))));
+  const failedCount = c.requests.filter((r) => !r.private && didNotHold(r)).length;
   return (
-    <div className="stack">
-      <h3 className="eyebrow">Ask the runtime builder</h3>
-      <textarea className="input" placeholder="Describe a change or a question in plain language…" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && (e.ctrlKey || e.metaKey) && void send(text)} />
-      <div className="row between"><span className="faint" style={{ fontSize: 11 }}>Ctrl+Enter to send. Changes are tested in isolation and previewed before they deploy.</span><button className="btn primary sm" disabled={busy || !text.trim()} onClick={() => send(text)}>{busy ? <span className="spinner" /> : "Send"}</button></div>
-      <div className="row wrap">{examples.map((e) => <button key={e} className="btn sm ghost" onClick={() => setText(e)}>{e}</button>)}</div>
-
-      {pending.map((p) => (
-        <div key={p.id} className="metric" style={{ borderColor: "var(--amber)" }}>
-          <div className="row between"><b>Preview · awaiting approval</b><span className="chip warn">{p.significance} · {p.requiredRole}</span></div>
-          <div className="stack" style={{ gap: 2, margin: "8px 0", fontSize: 12 }}>{p.preview.explanation.slice(0, 9).map((l: string) => <div key={l} className="mono dim">{l}</div>)}</div>
-          <div className="dim" style={{ fontSize: 12 }}>Affects: {p.preview.affectedComponents.join(", ")}</div>
-          <div className="row wrap" style={{ margin: "8px 0" }}>{p.tests.map((t: any) => <span key={t.id} className={`chip ${tone(t.status)}`} title={`${t.description}: ${t.detail}`}>{t.id.replace(/^engineering\./, "")}</span>)}</div>
-          {["model_judgment", "unverified"].includes(p.evidence) && <div className="chip warn" style={{ whiteSpace: "normal", borderRadius: 8 }}>Contains model-generated content. Tests cover safety and structure, not scientific correctness.</div>}
-          <div className="row" style={{ marginTop: 8 }}>
-            <button className="btn sm primary" disabled={c.role === "viewer"} onClick={() => decide(p.id, "approve")}>Approve &amp; deploy</button>
-            <button className="btn sm danger" disabled={c.role === "viewer"} onClick={() => decide(p.id, "reject")}>Reject</button>
-          </div>
+    <div className="chat">
+      <div className="row between">
+        <h3 className="eyebrow">My AI</h3>
+        <div className="seg"><button className={whose === "mine" ? "on" : ""} onClick={() => setWhose("mine")}>Mine</button><button className={whose === "crew" ? "on" : ""} onClick={() => setWhose("crew")}>Whole crew</button></div>
+      </div>
+      <div className="seg thin" title="Ideas that did not hold are kept with their reasons, so the crew does not try the same thing twice. Others see yours once you share them."><button className={view === "all" ? "on" : ""} onClick={() => setView("all")}>Everything</button><button className={view === "built" ? "on" : ""} onClick={() => setView("built")}>Built</button><button className={view === "failed" ? "on" : ""} onClick={() => setView("failed")}>Did not hold · {failedCount}</button></div>
+      <textarea ref={input} className="input" placeholder="Ask how something works, or try an idea: “If we had …, could we …?”" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && (e.ctrlKey || e.metaKey) && void send(text)} />
+      <div className="row between"><span className="faint" style={{ fontSize: 11 }}>Ctrl+Enter to send. This conversation is yours; the crew sees only what you share and what reaches the design.</span><button className="btn primary sm" disabled={busy || !text.trim()} title={busy ? "Sending…" : !text.trim() ? "Type a question or an idea first" : "Send to your AI (Ctrl+Enter)"} onClick={() => send(text)}>{busy ? <span className="spinner" /> : "Send"}</button></div>
+      {list.length === 0 && view !== "all" && <div className="faint" style={{ fontSize: 12 }}>{view === "failed" ? "No idea has been turned down yet. When your AI says an idea does not hold, it stays here with the reason; share it so the crew can build on it." : "Nothing built by an AI yet."}</div>}
+      {list.length === 0 && view === "all" && (
+        <div className="starters">
+          <div className="faint" style={{ fontSize: 11 }}>Things to try</div>
+          {starters.map((e) => <button key={e} onClick={() => setText(e)}>{e}</button>)}
         </div>
-      ))}
+      )}
 
-      <h3 className="eyebrow">Requests</h3>
-      {c.requests.length === 0 && <p className="dim">Nothing yet. Requests from every teammate appear here as they run.</p>}
-      {c.requests.map((r) => (
-        <div key={r.id} className="metric">
-          <div className="row between"><span style={{ fontSize: 13 }}>{r.text}</span><span className={`chip ${tone(r.status)}`}>{r.status.replace(/_/g, " ")}</span></div>
-          <div className="row wrap" style={{ margin: "6px 0" }}>
-            <span className="chip">{memberName(c, r.user.id)}</span>
-            {(r.feasibility?.classification ?? r.feasibility) && <span className={`chip ${tone(r.feasibility?.classification ?? r.feasibility)}`}>{String(r.feasibility?.classification ?? r.feasibility).replace(/_/g, " ")}</span>}
-          </div>
-          {(r.tasks ?? r.plan?.tasks ?? []).map((t: any) => (
-            <div key={t.id} className={`plan-step ${t.status}`}><span className="node" /><span className="mono" style={{ fontSize: 11 }}>{t.executedBy ?? t.capabilityId}<span className="dim"> · {t.status}</span></span></div>
-          ))}
-          {r.error && <div className="chip bad" style={{ whiteSpace: "normal", borderRadius: 8 }}>{r.error}</div>}
-          {r.status === "awaiting_clarification" && (
-            <div className="row" style={{ marginTop: 6 }}>
-              <input className="input" placeholder="Answer the question…" value={answers[r.id] ?? ""} onChange={(e) => setAnswers({ ...answers, [r.id]: e.target.value })} />
-              <button className="btn sm" onClick={() => void api("POST", `/api/sessions/${c.sid}/requests/${r.id}/clarify`, { answer: answers[r.id] }).then(c.reloadLists).catch((e) => c.toast(e.message, "warn"))}>Answer</button>
+      {list.map((r) => {
+        const proposal = c.proposals.find((p) => p.id === r.proposalId);
+        const pending = proposal?.status === "awaiting_approval";
+        const working = WORKING.includes(r.status);
+        const [label, kind] = r.answer ? (VERDICT[r.answer.verdict] ?? ["Answer", "info"]) : working ? ["Working…", "info"] : [String(r.status).replace(/_/g, " "), tone(r.status)];
+        const failed: any[] = proposal ? proposal.tests.filter((t: any) => t.status === "fail") : [];
+        const hard = failed.filter((t) => !String(t.id).startsWith("engineering."));
+        const deployed = r.status === "published";
+        // Someone else's conversation with their AI: only what reached the shared design is shown.
+        if (r.private) {
+          return (
+            <div key={r.id} className="turn private">
+              <div className="ai info">
+                <div className="row between"><span className="who">{memberName(c, r.user.id)} &amp; their AI</span><span className={`chip ${tone(r.status)}`}>{working ? "working…" : String(r.status).replace(/_/g, " ")}</span></div>
+                <p className="dim">{r.proposalId ? `Proposed a change to the shared design: ${r.summary ?? "see the proposal"}` : "A private conversation. It appears here if they share it."}</p>
+                {pending && proposal && (
+                  <div className="row wrap" style={{ marginTop: 8 }}>
+                    <button className="btn sm primary" disabled={c.role === "viewer"} onClick={() => decide(proposal.id, "approve", failed.length > 0 && hard.length === 0)}>{failed.length ? `Add it anyway · ${failed.length} limit${failed.length === 1 ? "" : "s"} to fix` : "Approve & deploy"}</button>
+                    <button className="btn sm danger" disabled={c.role === "viewer"} onClick={() => decide(proposal.id, "reject")}>Reject</button>
+                  </div>
+                )}
+              </div>
             </div>
-          )}
-          <button className="btn sm ghost" style={{ marginTop: 6 }} onClick={() => void api("GET", `/api/sessions/${c.sid}/requests/${r.id}`).then(setOpen)}>Analysis, feasibility &amp; trace</button>
-        </div>
-      ))}
+          );
+        }
+        const mine = r.user?.id === c.accountId;
+        return (
+          <div key={r.id} className="turn">
+            <div className="me"><span className="who">{whose === "crew" ? memberName(c, r.user.id) : "You"}</span><p>{r.text}</p></div>
+            <div className={`ai ${kind}`}>
+              <div className="row between"><span className="who">AI</span><span className={`chip ${kind}`}>{working && <span className="spinner" style={{ width: 9, height: 9 }} />}{deployed ? "In the design" : r.status === "rejected" ? "Rejected" : label}</span></div>
+              {r.answer ? <p>{r.answer.text}</p> : working ? <p className="dim">Looking at the mission, then building and testing in a copy…</p> : r.error ? <p>{r.error}</p> : null}
+              {r.answer?.facts?.length > 0 && (
+                <details>
+                  <summary>What was measured · {r.answer.facts.length}</summary>
+                  <table className="data"><tbody>{r.answer.facts.map((f: any, i: number) => <tr key={i}><td>{f.label}</td><td className="mono">{f.value}</td></tr>)}</tbody></table>
+                </details>
+              )}
+              {(r.tasks ?? r.plan?.tasks ?? []).map((t: any) => (
+                <div key={t.id} className={`plan-step ${t.status}`}><span className="node" /><span className="mono" style={{ fontSize: 11 }}>{t.executedBy ?? t.capabilityId}<span className="dim"> · {t.status}</span></span></div>
+              ))}
+              {pending && (
+                <div className="row wrap" style={{ marginTop: 8 }}>
+                  {hard.length ? <span className="chip bad" style={{ whiteSpace: "normal" }}>Cannot be added: {hard.map((t) => t.description).join("; ")}</span>
+                    : failed.length ? <button className="btn sm primary" disabled={c.role === "viewer"} title={`Adds it to the shared design and leaves ${failed.length} engineering limit(s) violated for the crew to fix`} onClick={() => decide(proposal.id, "approve", true)}>Add it anyway · {failed.length} limit{failed.length === 1 ? "" : "s"} to fix</button>
+                    : <button className="btn sm primary" disabled={c.role === "viewer"} onClick={() => decide(proposal.id, "approve")}>Approve &amp; deploy</button>}
+                  <button className="btn sm danger" disabled={c.role === "viewer"} onClick={() => decide(proposal.id, "reject")}>Reject</button>
+                </div>
+              )}
+              {r.status === "awaiting_clarification" && (
+                <div className="row" style={{ marginTop: 6 }}>
+                  <input className="input" placeholder="Your answer…" value={answers[r.id] ?? ""} onChange={(e) => setAnswers({ ...answers, [r.id]: e.target.value })} />
+                  <button className="btn sm" onClick={() => void api("POST", `/api/sessions/${c.sid}/requests/${r.id}/clarify`, { answer: answers[r.id] }).then(c.reloadLists).catch((e) => c.toast(e.message, "warn"))}>Answer</button>
+                </div>
+              )}
+              <div className="foot">
+                <span>{r.answer?.wording === "language_model" ? `Worded by ${r.answer.modelId}; the numbers come from the engineering models.` : r.answer ? "Assembled from the engineering models' results." : ""}</span>
+                {mine && !r.shared && didNotHold(r) && <span className="hint">Share it so nobody tries this twice →</span>}
+                {mine && <button title={r.shared ? "The crew can read this conversation. Click to make it private again." : "Only you can read this conversation. Click to let the crew read it."} onClick={() => void api("POST", `/api/sessions/${c.sid}/requests/${r.id}/share`, { shared: !r.shared }).then(c.reloadLists).catch((e) => c.toast(e.message, "warn"))}>{r.shared ? "Shared with crew ✓" : "Share with crew"}</button>}
+                <button onClick={() => void api("GET", `/api/sessions/${c.sid}/requests/${r.id}`).then(setOpen).catch((e) => c.toast(e.message, "warn"))}>How this was worked out</button>
+              </div>
+            </div>
+          </div>
+        );
+      })}
       {open && (
-        <div className="modal-veil" onClick={() => setOpen(null)}>
-          <div className="glass modal" onClick={(e) => e.stopPropagation()}>
-            <div className="row between"><h2 style={{ fontSize: 20 }}>{open.text}</h2><button className="btn sm ghost" onClick={() => setOpen(null)}>Close</button></div>
+        <Modal onClose={() => setOpen(null)}>
+            <div className="row between"><h2 style={{ fontSize: 20, textTransform: "none" }}>{open.text}</h2><button className="btn sm ghost" onClick={() => setOpen(null)}>Close</button></div>
+            {open.answer && <AnswerBlock answer={open.answer} />}
             {open.requirement && (<>
               <h3 className="eyebrow" style={{ margin: "16px 0 6px" }}>Requirement analysis · {open.requirement.analysis.method === "llm" ? `language model (${open.requirement.analysis.modelId}) — model judgement` : "rule-based analyser — heuristic"}</h3>
               {open.requirement.operations.map((o: any) => <div key={o.id} className="objective"><span className="chip info">{o.category.replace(/_/g, " ")}</span> {o.description}{o.assumptions.length > 0 && <div className="chip warn" style={{ whiteSpace: "normal", borderRadius: 8, marginTop: 4 }}>Assumed: {o.assumptions.join("; ")}</div>}</div>)}
@@ -288,8 +388,7 @@ export function AiPanel({ c }: { c: Ctx }) {
             </>)}
             <h3 className="eyebrow" style={{ margin: "16px 0 6px" }}>Trace · {open.trace.length} events</h3>
             <table className="data"><tbody>{open.trace.map((e: any) => <tr key={e.seq}><td><span className="chip">{e.stage}</span></td><td>{e.message}{e.data !== undefined && <details><summary className="faint">data</summary><pre className="code">{JSON.stringify(e.data, null, 2)}</pre></details>}</td></tr>)}</tbody></table>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );
@@ -303,7 +402,7 @@ const TRADE_PARAMS = [
 ];
 const TRADE_METRICS = [
   ["power.budget", "marginW", "Power margin W"], ["orbit.eclipse", "eclipseFraction", "Eclipse fraction"], ["science.return", "neutronFootprintKm", "Neutron footprint km"], ["science.return", "bestImagingResolutionM", "Imaging resolution m"],
-  ["science.return", "totalReturnedGbPerDay", "Data Gb/day"], ["comms.link", "worstMarginDb", "Link margin dB"], ["cost.budget", "marginMusd", "Cost margin $M"], ["mass.budget", "marginKg", "Mass margin kg"],
+  ["science.return", "totalReturnedGbPerDay", "Data Gb/day"], ["comms.link", "worstMarginDb", "Link margin dB"], ["cost.budget", "marginMusd", "Cost margin $M"], ["mass.budget", "marginKg", "Mass margin kg"], ["schedule.budget", "marginMonths", "Schedule margin mo"],
 ];
 
 export function AnalysisPanel({ c, previewDay }: { c: Ctx; previewDay: number | null }) {
@@ -365,7 +464,7 @@ export function AnalysisPanel({ c, previewDay }: { c: Ctx; previewDay: number | 
 
       <hr className="hairline" />
       <h3 className="eyebrow">Mission simulation</h3>
-      <p className="faint" style={{ fontSize: 12 }}>Flies the design day by day through the mission: eclipse season, array degradation, battery reserve, Earth range, data stored and returned.</p>
+      <p className="faint" style={{ fontSize: 12 }}>Flies the design day by day through the mission: eclipse season, array degradation, battery reserve, Earth range, data stored and returned — and the in-flight events this mission will meet. You find out what they are by flying.</p>
       <button className="btn" disabled={busy !== null || c.role === "viewer"} onClick={simulate}>{busy === "sim" ? <span className="spinner" /> : sim ? "Re-run simulation" : "Run mission simulation"}</button>
       {sim && (
         <div className="metric" style={{ opacity: stale ? 0.6 : 1 }}>
@@ -377,6 +476,21 @@ export function AnalysisPanel({ c, previewDay }: { c: Ctx; previewDay: number | 
           <div className="stack" style={{ gap: 4, marginTop: 8 }}>{sim.events.slice(0, 8).map((e: any, i: number) => (
             <div key={i} className="row" style={{ alignItems: "flex-start", cursor: "pointer" }} onClick={() => c.setPreviewDay(e.day)}><span className={`chip ${e.severity === "critical" ? "bad" : e.severity === "warn" ? "warn" : "info"}`}>day {e.day}</span><span style={{ fontSize: 12 }}>{e.message}</span></div>
           ))}</div>
+          <FlightEvents sim={sim} onDay={c.setPreviewDay} />
+          {sim.returnedByInstrument?.length > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <div className="eyebrow" title="What each instrument's data did over the flight: sent home, or made but lost on board when storage overflowed. Control logic can set whose data goes down first.">Science data by instrument</div>
+              <table className="data"><thead><tr><th>Instrument</th><th>Sent home</th><th>Lost on board</th></tr></thead><tbody>
+                {sim.returnedByInstrument.map((r: any) => <tr key={r.instrumentId}><td>{r.name}</td><td className="mono">{fmt(r.returnedGb)} Gb</td><td className="mono" style={{ color: r.lostGb > 0.01 ? "var(--amber)" : undefined }}>{fmt(r.lostGb)} Gb</td></tr>)}
+              </tbody></table>
+            </div>
+          )}
+          {(sim.controlLog?.length > 0 || sim.kpis.daysControlActive > 0) && (
+            <div style={{ marginTop: 10 }}>
+              <div className="eyebrow">Onboard control logic · acted on {sim.kpis.daysControlActive} of {sim.days} days</div>
+              {sim.controlLog.slice(0, 8).map((e: any, i: number) => <div key={i} className="mono" style={{ fontSize: 11, cursor: "pointer" }} title="Show this day in the scene" onClick={() => c.setPreviewDay(e.day)}><span className="dim">day {e.day}</span> {e.note ? `${e.note} — ` : ""}{e.effect}</div>)}
+            </div>
+          )}
         </div>
       )}
       <hr className="hairline" />
@@ -398,6 +512,7 @@ export function ReviewPanel({ c, onSubmitted }: { c: Ctx; onSubmitted(e: Evaluat
     setBusy(null);
   };
   const lead = c.role === "lead";
+  const sandbox = c.snap.session.mode === "sandbox";
   return (
     <div className="stack">
       <h3 className="eyebrow">Concept maturity · CML {m.level} {m.levelName}</h3>
@@ -415,15 +530,15 @@ export function ReviewPanel({ c, onSubmitted }: { c: Ctx; onSubmitted(e: Evaluat
       </select>
       <input className="input" placeholder="Summary" value={note.summary} onChange={(e) => setNote({ ...note, summary: e.target.value })} />
       {note.kind === "mission_problem" && <input className="input" placeholder="Mitigation" value={note.mitigation} onChange={(e) => setNote({ ...note, mitigation: e.target.value })} />}
-      <button className="btn sm" disabled={!note.summary.trim() || c.role === "viewer"} onClick={() => act("note", async () => { await api("POST", `/api/sessions/${c.sid}/notes`, note); setNote({ ...note, summary: "", mitigation: "" }); c.toast("Recorded in the research record.", "ok"); })}>Record</button>
+      <button className="btn sm" disabled={!note.summary.trim() || c.role === "viewer"} title={c.role === "viewer" ? "Viewers cannot add to the research record" : !note.summary.trim() ? "Write a summary first" : "Add this to the mission's research record"} onClick={() => act("note", async () => { await api("POST", `/api/sessions/${c.sid}/notes`, note); setNote({ ...note, summary: "", mitigation: "" }); c.toast("Recorded in the research record.", "ok"); })}>Record</button>
       <div className="dim mono" style={{ fontSize: 11 }}>{c.snap.game.risks} risk(s) with mitigation · {c.snap.game.reviews} review(s) held</div>
       <hr className="hairline" />
       <h3 className="eyebrow">Mission lead</h3>
       {!lead && <p className="dim" style={{ fontSize: 12 }}>Reviews, phase gates and submission belong to the mission lead.</p>}
       <div className="row wrap">
-        <button className="btn sm" disabled={!lead || busy !== null} onClick={() => act("review", async () => { const r = await api("POST", `/api/sessions/${c.sid}/review`, {}); setAiReview(r.aiReview); c.toast(`Concept review recorded: score ${r.evaluation.score}, CML ${r.maturity.level}.`, "ok"); })}>Hold concept review</button>
-        <button className="btn sm" disabled={!lead || busy !== null || Boolean(c.snap.game.submitted)} onClick={() => act("phase", async () => { await api("POST", `/api/sessions/${c.sid}/phase`, {}); })}>Advance phase</button>
-        <button className="btn sm primary" disabled={!lead || busy !== null || Boolean(c.snap.game.submitted)} onClick={() => window.confirm("Submit this mission? The design is frozen and scored.") && act("submit", async () => { const r = await api("POST", `/api/sessions/${c.sid}/submit`, {}); onSubmitted(r.evaluation, r.submission); })}>Submit mission</button>
+        <button className="btn sm" disabled={!lead || busy !== null} title={!lead ? "Only the mission lead holds reviews" : "Hold a review of the design as it stands"} onClick={() => act("review", async () => { const r = await api("POST", `/api/sessions/${c.sid}/review`, {}); setAiReview(r.aiReview); c.toast(`Concept review recorded: score ${r.evaluation.score}, CML ${r.maturity.level}.`, "ok"); })}>Hold concept review</button>
+        <button className="btn sm" disabled={!lead || busy !== null || Boolean(c.snap.game.submitted)} title={!lead ? "Only the mission lead moves the mission to its next phase" : c.snap.game.submitted ? "The mission has been submitted" : "Move to the next phase once its gate is met"} onClick={() => act("phase", async () => { await api("POST", `/api/sessions/${c.sid}/phase`, {}); })}>Advance phase</button>
+        {sandbox ? <span className="chip" title="Sandbox missions are for experimenting. Start one from the mission board to submit a score.">Sandbox · not ranked</span> : <button className="btn sm primary" disabled={!lead || busy !== null || Boolean(c.snap.game.submitted)} title={!lead ? "Only the mission lead submits the mission" : c.snap.game.submitted ? "Already submitted" : c.snap.game.charter ? "Freeze the design and have it evaluated" : "Define the mission first"} onClick={() => window.confirm("Submit this mission? The design is frozen and scored.") && act("submit", async () => { const r = await api("POST", `/api/sessions/${c.sid}/submit`, {}); onSubmitted(r.evaluation, { ...r.submission, standing: r.standing }); })}>Submit mission</button>}
       </div>
       {aiReview && <div className="metric"><span className="chip warn">AI review-board critique · model judgement, not scored</span><p style={{ fontSize: 13, marginTop: 6 }}>{aiReview}</p></div>}
     </div>
@@ -469,13 +584,22 @@ export function LogPanel({ c }: { c: Ctx }) {
 }
 
 // ---------- Mission evaluation dashboard ----------
-export function EvaluationDashboard({ evaluation, title, submission, onClose }: { evaluation: Evaluation; title: string; submission?: any; onClose(): void }) {
+export function EvaluationDashboard({ evaluation, title, submission, checks, onClose }: { evaluation: Evaluation; title: string; submission?: any; checks?: any[]; onClose(): void }) {
   const ringRef = useRef<SVGCircleElement>(null);
   useEffect(() => { requestAnimationFrame(() => ringRef.current?.setAttribute("stroke-dashoffset", String(377 * (1 - evaluation.score / 100)))); }, [evaluation.score]);
   return (
-    <div className="modal-veil" onClick={onClose}>
-      <div className="glass modal" onClick={(e) => e.stopPropagation()}>
+    <Modal onClose={onClose}>
         <div className="row between"><div><div className="eyebrow">{submission ? "Mission submitted" : "Mission evaluation"}</div><h2 style={{ fontSize: 26, marginTop: 6 }}>{title}</h2></div><button className="btn ghost sm" onClick={onClose}>Close</button></div>
+        {submission?.standing && <div className="standing"><b>#{submission.standing.rank}</b><span>of {submission.standing.of} crew{submission.standing.of === 1 ? "" : "s"} that flew {submission.standing.scope === "brief" ? "this brief" : "this mission template"}<br /><span className="faint">{submission.standing.title}</span></span></div>}
+        {evaluation.outcome && (
+          <div className={`outcome ${evaluation.outcome.verdict}`} style={{ marginTop: 14 }}>
+            <div className="eyebrow">Does the mission work?</div>
+            <div className="headline" style={{ fontSize: 17 }}>{evaluation.outcome.headline}</div>
+            {evaluation.outcome.conditions.map((k) => <div key={k.id} className={`cond ${k.met === null ? "open" : k.met ? "met" : "unmet"}`} style={{ cursor: "default" }}><span className="mark">{k.met === null ? "–" : k.met ? "✓" : "✗"}</span><span className="t">{k.title}</span><span className="e">{k.evidence}</span></div>)}
+            <div className="faint" style={{ fontSize: 10.5, marginTop: 4 }}>{evaluation.outcome.rule} The score below is secondary.</div>
+          </div>
+        )}
+        <Debrief evaluation={evaluation} checks={checks ?? []} />
         <div className="grid" style={{ gridTemplateColumns: "220px 1fr", gap: 24, marginTop: 20, alignItems: "center" }}>
           <div className="center" style={{ position: "relative" }}>
             <svg width="190" height="190" viewBox="0 0 140 140">
@@ -488,7 +612,7 @@ export function EvaluationDashboard({ evaluation, title, submission, onClose }: 
           <div>
             <div className="row" style={{ alignItems: "baseline", gap: 18 }}><span className="grade">{evaluation.grade}</span><div className="dim">Objectives {evaluation.objectivesScore.toFixed(1)} / 85 · Process {evaluation.rigorScore} / 15{evaluation.penalties.length ? ` · Penalties −${evaluation.penalties.reduce((s, p) => s + p.points, 0)}` : ""}</div></div>
             {Object.entries(evaluation.categories).map(([k, v]) => (
-              <div key={k} style={{ marginTop: 10 }}><div className="row between mono dim" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.12em" }}><span>{k}</span><span>{v.earned.toFixed(1)} / {v.possible}</span></div><div className="bar"><i style={{ width: `${(v.earned / v.possible) * 100}%` }} /></div></div>
+              <div key={k} style={{ marginTop: 10 }}><div className="row between mono dim" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.12em" }}><span>{k}</span><span>{v.earned.toFixed(1)} / {+v.possible.toFixed(1)}</span></div><div className="bar"><i style={{ width: `${Math.min(100, (v.earned / v.possible) * 100)}%` }} /></div></div>
             ))}
             {evaluation.rigor.map((r) => <div key={r.item} className="dim" style={{ fontSize: 12, marginTop: 8 }}><b>{r.item}</b> {r.earned}/{r.possible} — {r.detail}</div>)}
             {evaluation.penalties.map((p) => <div key={p.reason} className="chip bad" style={{ whiteSpace: "normal", borderRadius: 8, marginTop: 8 }}>−{p.points}: {p.reason}</div>)}
@@ -500,11 +624,10 @@ export function EvaluationDashboard({ evaluation, title, submission, onClose }: 
         </div>
         <table className="data" style={{ marginTop: 16 }}>
           <thead><tr><th>Objective</th><th>Result</th><th>Target</th><th>Credit</th><th>Points</th></tr></thead>
-          <tbody>{evaluation.objectives.map((o) => <tr key={o.id}><td><b>{o.title}</b><div className="faint">{o.feedback}</div></td><td className="mono">{o.value === null ? "–" : fmt(o.value)} {o.unit}</td><td className="mono">{fmt(o.target)} {o.unit}</td><td style={{ width: 120 }}><div className={`bar ${o.achieved >= 1 ? "ok" : o.achieved > 0 ? "warn" : "bad"}`}><i style={{ width: `${o.achieved * 100}%` }} /></div></td><td className="mono">{o.points.toFixed(1)} / {o.weight}</td></tr>)}</tbody>
+          <tbody>{evaluation.objectives.map((o) => <tr key={o.id}><td><b>{o.title}</b>{(o as any).primary && <span className="chip info" style={{ marginLeft: 6 }}>primary</span>}{(o as any).stretch && <span className="chip" style={{ marginLeft: 6 }}>stretch</span>}<div className="faint">{o.feedback}</div></td><td className="mono">{o.value === null ? "–" : fmt(o.value)} {o.unit}</td><td className="mono">{fmt(o.target)} {o.unit}</td><td style={{ width: 120 }}><div className={`bar ${o.achieved >= 1 ? "ok" : o.achieved > 0 ? "warn" : "bad"}`}><i style={{ width: `${o.achieved * 100}%` }} /></div></td><td className="mono">{o.points.toFixed(1)} / {+o.weight.toFixed(1)}</td></tr>)}</tbody>
         </table>
         <p className="faint" style={{ fontSize: 11, marginTop: 12 }}>{evaluation.basis}</p>
-        {submission && <div className="row" style={{ marginTop: 16 }}><a className="btn primary" href="/leaderboard">View leaderboard</a><span className="faint mono" style={{ fontSize: 11 }}>config {submission.configHash.slice(0, 16)}… · v{submission.missionVersion}</span></div>}
-      </div>
-    </div>
+        {submission && <div className="row" style={{ marginTop: 16 }}><a className="btn primary" href={submission.briefId ? `/leaderboard?brief=${submission.briefId}` : "/leaderboard"}>View leaderboard</a><span className="faint mono" style={{ fontSize: 11 }}>config {submission.configHash.slice(0, 16)}… · v{submission.missionVersion}</span></div>}
+    </Modal>
   );
 }

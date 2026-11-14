@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import Backdrop from "@/components/Backdrop";
 import Nav from "@/components/Nav";
-import { type Account, api } from "@/lib/api";
+import { go as navigate, type Account, api } from "@/lib/api";
 
 const DIFFICULTY = [
   { id: "cadet", name: "Cadet", text: "Generous budget and mass. No complications." },
@@ -18,14 +18,23 @@ export default function Lobby() {
   const [form, setForm] = useState({ name: "", difficulty: "engineer", visibility: "public", policy: "open", discipline: "systems" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [brief, setBrief] = useState<any>(null);
 
   useEffect(() => {
     const wanted = new URLSearchParams(window.location.search).get("scenario");
     if (wanted) setSelected(wanted);
+    const briefId = new URLSearchParams(window.location.search).get("brief");
+    if (briefId) void api("GET", "/api/briefs").then((feed) => {
+      const found = feed.briefs.find((b: any) => b.id === briefId);
+      if (found) {
+        setBrief(found);
+        setSelected(found.template);
+      }
+    }).catch(() => undefined);
     void api("GET", "/api/scenarios").then(setScenarios).catch(() => undefined);
   }, []);
   useEffect(() => {
-    if (account === null) window.location.href = "/auth?next=/lobby";
+    if (account === null) navigate("/auth?next=/lobby");
     if (!account) return;
     const load = (): void => void api("GET", "/api/sessions").then(setSessions).catch(() => undefined);
     load();
@@ -38,8 +47,8 @@ export default function Lobby() {
     setBusy(true);
     setError(null);
     try {
-      const created = await api("POST", "/api/sessions", { scenarioId: selected, ...form });
-      window.location.href = `/mission?s=${created.session.id}`;
+      const created = await api("POST", "/api/sessions", { scenarioId: selected, ...form, ...(brief ? { briefId: brief.id } : {}) });
+      navigate(`/mission?s=${created.session.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create the mission");
       setBusy(false);
@@ -51,7 +60,7 @@ export default function Lobby() {
         const inviteCode = s.visibility === "invite" ? (window.prompt("Invite code for this mission:") ?? "") : undefined;
         await api("POST", `/api/sessions/${s.id}/join`, { inviteCode });
       }
-      window.location.href = `/mission?s=${s.id}`;
+      navigate(`/mission?s=${s.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not join");
     }
@@ -64,7 +73,17 @@ export default function Lobby() {
         <Nav onAccount={setAccount} />
         <main className="container" style={{ paddingBottom: 80 }}>
           <div className="eyebrow fade-in">Mission selection</div>
-          <h1 className="fade-in delay-1" style={{ fontSize: 40, margin: "10px 0 24px" }}>Choose your mission</h1>
+          <h1 className="fade-in delay-1" style={{ fontSize: 40, margin: "10px 0 24px" }}>{brief ? "Mission brief" : "Choose your mission"}</h1>
+          {brief && (
+            <div className="glass card" style={{ marginBottom: 18 }}>
+              <div className="row between wrap"><h2 style={{ fontSize: 24 }}>{brief.title}</h2><span className={`chip ${brief.origin === "ai" ? "info" : ""}`}>{brief.origin === "ai" ? `AI-written · ${brief.modelId}` : "Built-in"} · {brief.day}</span></div>
+              <p style={{ margin: "12px 0 8px", maxWidth: "90ch" }}>{brief.problem}</p>
+              <p className="dim" style={{ maxWidth: "90ch" }}>{brief.whyItMatters}</p>
+              <ul className="dim" style={{ margin: "10px 0 0", paddingLeft: 18 }}>{brief.scienceQuestions.map((q: string) => <li key={q}>{q}</li>)}</ul>
+              <div className="row wrap" style={{ marginTop: 12 }}><span className="chip">Budget ×{brief.constraints.budgetFactor.toFixed(2)}</span><span className="chip">Mass ×{brief.constraints.massFactor.toFixed(2)}</span><span className="chip">Duration ×{brief.constraints.durationFactor.toFixed(2)}</span><a className="btn sm ghost" href="/lobby">Choose a template instead</a></div>
+              <p className="faint" style={{ fontSize: 11, marginTop: 10 }}>Played on the engineering baseline selected below. The brief frames the problem; scoring comes from the engineering models.</p>
+            </div>
+          )}
           <div className="grid cols-3">
             {scenarios.map((s, i) => (
               <button key={s.id} className={`glass scenario-card fade-in ${selected === s.id ? "selected" : ""}`} style={{ animationDelay: `${i * 0.08}s`, color: "inherit" }} onClick={() => setSelected(s.id)}>
@@ -114,13 +133,22 @@ export default function Lobby() {
                     </select>
                   </label>
                 </div>
+                <div className="field">Mode
+                  <div className="grid cols-2" style={{ gap: 8 }}>
+                    {[["campaign", "Ranked mission", "Fixed limits, phase gates, in-flight events. Submit for a score and a rank."], ["sandbox", "Sandbox", "Every part unlocked and every limit adjustable. For experimenting; not ranked."]].map(([id, name, text]) => (
+                      <button key={id} type="button" className={`btn ${(form as any).mode === id || (!(form as any).mode && id === "campaign") ? "" : "ghost"}`} style={{ flexDirection: "column", alignItems: "flex-start", whiteSpace: "normal", textAlign: "left", height: "100%" }} onClick={() => setForm({ ...form, mode: id } as any)}>
+                        <b>{name}</b><span className="dim" style={{ fontSize: 11 }}>{text}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <label className="field">Change policy
                   <select className="input" value={form.policy} onChange={(e) => setForm({ ...form, policy: e.target.value })}>
                     <option value="open">Open design — validated changes publish immediately</option>
                     <option value="review">Lead review — significant changes need the lead's approval</option>
                   </select>
                 </label>
-                <p className="faint" style={{ fontSize: 12 }}>You will be the mission lead. AI-generated code always needs the lead's approval, whatever the policy.</p>
+                <p className="faint" style={{ fontSize: 12 }}>You will be the mission lead. Play solo or bring up to three crewmates (four seats). AI-generated code always needs the lead's approval, whatever the policy.</p>
                 {error && <div className="chip bad" style={{ whiteSpace: "normal", borderRadius: 10, padding: "8px 12px" }}>{error}</div>}
                 <button className="btn primary lg" disabled={busy || !account} onClick={create}>{busy ? <span className="spinner" /> : "Launch mission"}</button>
               </section>
@@ -136,7 +164,7 @@ export default function Lobby() {
                   <tbody>
                     {sessions.map((s) => (
                       <tr key={s.id}>
-                        <td><b>{s.name}</b><div className="dim">{s.scenarioTitle} · {s.difficulty}</div></td>
+                        <td><b>{s.name}</b>{s.mode === "sandbox" && <span className="chip" style={{ marginLeft: 8 }}>sandbox</span>}<div className="dim">{s.briefTitle ?? s.scenarioTitle} · {s.difficulty}</div></td>
                         <td><span className={`chip ${s.submitted ? "ok" : "info"}`}>{s.phase}</span></td>
                         <td className="mono">{s.members}/{s.maxMembers}</td>
                         <td className="mono">v{s.version}</td>

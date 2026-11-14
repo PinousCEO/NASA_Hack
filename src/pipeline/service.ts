@@ -9,7 +9,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import path from "node:path";
 import { newId, nowIso, type User } from "../core/types.js";
 import type { LlmService } from "../llm/llm.js";
-import type { MemoryKind, ResearchMemory } from "../memory/memory.js";
+import { composeAnswer, composeBuildReply } from "./answer.js";
+import { type MemoryKind, readableBy, type ResearchMemory } from "../memory/memory.js";
 import { DraftWorkspace } from "../registry/capability.js";
 import type { CapabilityRegistry } from "../registry/registry.js";
 import type { MissionStore, MissionVersion } from "../state/store.js";
@@ -31,6 +32,10 @@ export interface RequestServiceDeps {
   store: MissionStore;
   memory: ResearchMemory;
   llm: LlmService;
+  /** What the crew is working on, for the analyser: the problem, the goals and the parts catalogue. */
+  missionContext?: () => string;
+  /** Who a given player is in the crew (their seat and task, and who holds the other seats). */
+  playerContext?: (userId: string) => string;
   /** Knowledge retrieval used to ground model-based request analysis. */
   retrieve?: KnowledgeRetriever;
   proposals: ProposalService;
@@ -51,7 +56,7 @@ export class RequestService extends EventEmitter<RequestEvents> {
 
   constructor(private readonly deps: RequestServiceDeps) {
     super();
-    this.analyzer = new RequirementAnalyzer(deps.llm, deps.retrieve);
+    this.analyzer = new RequirementAnalyzer(deps.llm, deps.retrieve, deps.missionContext);
     this.planner = new Planner(deps.registry, deps.llm);
     this.executor = new PlanExecutor(deps.registry);
     if (deps.dataDir) {
@@ -76,6 +81,27 @@ export class RequestService extends EventEmitter<RequestEvents> {
 
   list(): RequestRecord[] {
     return [...this.requests.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  /** This player's earlier exchanges with their AI, oldest first: each player has their own thread. */
+  private conversation(record: RequestRecord): { said: string; replied: string; outcome: string }[] {
+    return [...this.requests.values()]
+      .filter((r) => r.id !== record.id && r.user.id === record.user.id && !r.action && r.answer?.text && r.createdAt <= record.createdAt)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .slice(-6)
+      .map((r) => ({ said: r.text.slice(0, 500), replied: r.answer!.text.slice(0, 700), outcome: r.answer!.verdict }));
+  }
+
+  /** Share a conversation with the crew, or take it back. Only its owner can. */
+  share(id: string, userId: string, shared: boolean): RequestRecord {
+    const record = this.requests.get(id);
+    if (!record) throw new Error(`Request "${id}" not found`);
+    if (record.user.id !== userId) throw new Error("Only the person who asked can share this conversation");
+    record.shared = shared;
+    record.updatedAt = nowIso();
+    this.emit("updated", record);
+    this.persist(record);
+    return record;
   }
 
   /** Start processing a request. Returns immediately; use `wait` or the `updated` event to follow it. */
@@ -118,6 +144,8 @@ export class RequestService extends EventEmitter<RequestEvents> {
       planIssues: [],
       trace: [],
     };
+    record.shared = true;
+    record.action = true;
     this.structured.set(record.id, args.operations.map((op, i) => ({ ...op, id: `op${i + 1}` })));
     this.requests.set(record.id, record);
     this.start(record);
@@ -177,9 +205,35 @@ export class RequestService extends EventEmitter<RequestEvents> {
     this.setStatus(record, approved ? "published" : "rejected");
   }
 
+  /** Requests waiting for their turn, oldest first. */
+  private waiting: RequestRecord[] = [];
+  private turn: Promise<void> = Promise.resolve();
+
+  /**
+   * Requests run one at a time per mission, in arrival order: each starts from the state the
+   * previous one left, and everyone on the team sees the same queue.
+   */
   private start(record: RequestRecord): void {
     const controller = new AbortController();
-    const done = this.process(record, controller.signal)
+    if (this.running.size > 0) {
+      this.waiting.push(record);
+      record.queuePosition = this.waiting.length;
+      this.setStatus(record, "queued");
+    }
+    const previous = this.turn;
+    const done = previous
+      .then(() => {
+        const i = this.waiting.indexOf(record);
+        if (i >= 0) this.waiting.splice(i, 1);
+        delete record.queuePosition;
+        this.waiting.forEach((r, k) => {
+          r.queuePosition = k + 1;
+          this.emit("updated", r);
+        });
+        if (controller.signal.aborted) throw new Error("Cancelled while queued");
+        if (record.status === "queued") this.setStatus(record, "analyzing");
+        return this.process(record, controller.signal);
+      })
       .catch((err: unknown) => {
         record.error = err instanceof Error ? err.message : String(err);
         this.trace(record, "execution", `Request failed: ${record.error}`);
@@ -190,6 +244,7 @@ export class RequestService extends EventEmitter<RequestEvents> {
         this.running.delete(record.id);
         this.persist(record);
       });
+    this.turn = done;
     this.running.set(record.id, { controller, done });
   }
 
@@ -215,7 +270,10 @@ export class RequestService extends EventEmitter<RequestEvents> {
 
   private remember(record: RequestRecord, kind: MemoryKind, summary: string, data: unknown, verification: Parameters<ResearchMemory["add"]>[0]["verification"], extra: { assumptions?: string[]; capabilityId?: string; capabilityVersion?: string; modelId?: string } = {}): void {
     const head = this.deps.store.head();
+    // What a player said to their own AI, and what came of it short of a change to the shared design, stays theirs.
+    const conversation = !record.action && record.shared !== true && (kind === "user_request" || kind === "failure" || kind === "plan");
     this.deps.memory.add({
+      ...(conversation ? { visibility: { ownerId: record.user.id } } : {}),
       kind,
       missionName: head.config.meta.name,
       missionVersion: head.version,
@@ -250,7 +308,7 @@ export class RequestService extends EventEmitter<RequestEvents> {
     const preset = this.structured.get(record.id);
     const requirement: StructuredRequirement = preset
       ? { id: newId("req"), originalText: record.text, summary: record.text, operations: preset, missingInformation: [], analysis: { method: "rule_based", verification: "deterministic_calculation" }, missionVersionInspected: mission.version }
-      : await this.analyzer.analyze(record.text, mission, signal);
+      : await this.analyzer.analyze(record.text, mission, signal, this.conversation(record), this.deps.playerContext?.(record.user.id) ?? "");
     record.requirement = requirement;
     this.trace(record, "analysis", `Requirement analysed (${requirement.analysis.method}): ${requirement.summary}`, {
       method: requirement.analysis.method,
@@ -259,7 +317,15 @@ export class RequestService extends EventEmitter<RequestEvents> {
       missingInformation: requirement.missingInformation,
     });
     this.remember(record, "user_request", record.text, { requirement }, requirement.analysis.verification, requirement.analysis.modelId ? { modelId: requirement.analysis.modelId } : {});
+    // The AI answered in words: either nothing needed building, or the idea cannot work and it said why.
+    if (requirement.operations.length === 0 && requirement.directReply) {
+      const judged = requirement.hypothesis === "refuted" || requirement.hypothesis === "outside_model" || requirement.hypothesis === "conditional" ? requirement.hypothesis : "explained";
+      record.answer = { verdict: judged, text: requirement.directReply, wording: "language_model", ...(requirement.analysis.modelId ? { modelId: requirement.analysis.modelId } : {}), facts: [] };
+      this.trace(record, "analysis", "Answered directly from the mission configuration and results (model judgement; nothing was built)");
+      return this.setStatus(record, "completed");
+    }
     if (requirement.missingInformation.some((m) => m.blocking)) {
+      record.answer = { verdict: "needs_input", text: requirement.missingInformation.filter((m) => m.blocking).map((m) => m.question).join(" "), wording: "template", facts: [] };
       this.trace(record, "analysis", "Clarification needed before planning", { questions: requirement.missingInformation.filter((m) => m.blocking).map((m) => m.question) });
       return this.setStatus(record, "awaiting_clarification");
     }
@@ -267,7 +333,7 @@ export class RequestService extends EventEmitter<RequestEvents> {
     // 3. Retrieve similar past work to inform the user and (for model planning) the plan.
     record.similarPastWork = memory
       .search(requirement.summary, { limit: 5, kinds: ["design_change", "simulation_result", "failure", "mission_outcome", "validation_report"] })
-      .filter((m) => m.record.requestId !== record.id)
+      .filter((m) => m.record.requestId !== record.id && readableBy(m.record, record.user.id))
       .map(({ record: r, score }) => ({ id: r.id, kind: r.kind, summary: r.summary, score }));
     if (record.similarPastWork.length) this.trace(record, "memory", `Found ${record.similarPastWork.length} similar past record(s)`, record.similarPastWork);
 
@@ -288,6 +354,7 @@ export class RequestService extends EventEmitter<RequestEvents> {
     this.trace(record, "feasibility", `Feasibility: ${feasibility.classification} — ${feasibility.summary}`, { factors: feasibility.factors, suggestedModifications: feasibility.suggestedModifications, evidenceBasis: feasibility.evidenceBasis });
     if (!feasibility.proceed) {
       this.remember(record, "failure", `Not executed (${feasibility.classification}): ${requirement.summary}`, { feasibility }, "deterministic_calculation");
+      record.answer = await composeAnswer(record, this.deps.llm, signal);
       return this.setStatus(record, "infeasible");
     }
 
@@ -322,6 +389,7 @@ export class RequestService extends EventEmitter<RequestEvents> {
     if (plan.status === "failed") {
       const failed = plan.tasks.filter((t) => t.status === "failed");
       record.error = failed.map((t) => `${t.id}: ${t.error}`).join("; ");
+      record.answer = { verdict: "cannot", text: `I could not do that: ${failed.map((t) => t.error).join("; ")}`, wording: "template", facts: [] };
       this.remember(record, "failure", `Execution failed: ${requirement.summary} — ${record.error}`, { failedTasks: failed.map((t) => ({ id: t.id, capabilityId: t.capabilityId, error: t.error })) }, "deterministic_calculation");
       return this.setStatus(record, "failed");
     }
@@ -329,6 +397,9 @@ export class RequestService extends EventEmitter<RequestEvents> {
     // 7. Changes go to preview and approval; read-only requests are complete.
     if (draft.isEmpty) {
       draft.discard();
+      // A question was asked: say the answer, not just that the tools ran.
+      record.answer = await composeAnswer(record, this.deps.llm, signal);
+      if (record.answer) this.trace(record, "execution", `Answer composed (${record.answer.wording === "language_model" ? `wording by ${record.answer.modelId}, model judgement` : "from the results by template"}); the values come from ${[...new Set(record.answer.facts.map((f) => f.source))].join(", ") || "the feasibility assessment"}`);
       return this.setStatus(record, "completed");
     }
     const proposal = await proposals.create({ requestId: record.id, user: record.user, draft, plan });
@@ -340,6 +411,8 @@ export class RequestService extends EventEmitter<RequestEvents> {
       evidence: proposal.evidence,
     });
     this.remember(record, "validation_report", `Validation of proposed change: ${requirement.summary}`, { tests: proposal.tests, consequences: proposal.preview.consequences }, "deterministic_calculation");
+    // Say what was built and what the engineering models measured, before anyone has to decide.
+    record.answer = await composeBuildReply(record, proposal, this.deps.llm, signal);
     this.emit("proposal", proposal);
     this.setStatus(record, "awaiting_approval");
   }

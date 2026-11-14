@@ -12,6 +12,7 @@ import { TerrainService } from "../nasa/terrain.js";
 import { missionCapabilities } from "../capabilities/mission.js";
 import { nasaCapabilities } from "../capabilities/nasa.js";
 import { scienceCapabilities } from "../capabilities/science.js";
+import { BriefService } from "../game/briefs.js";
 import { KnowledgeBase } from "../knowledge/knowledge.js";
 import { createLlm, type LlmService } from "../llm/llm.js";
 import { McpBridge } from "../mcp/bridge.js";
@@ -38,6 +39,7 @@ export interface Platform {
   auth: AuthService;
   audit: AuditLog;
   sessions: SessionManager;
+  briefs: BriefService;
   terrain: TerrainService;
   imagery: ImageryService;
   assetsDir: string;
@@ -60,6 +62,8 @@ export function createPlatform(options: PlatformOptions = {}): Platform {
   const terrain = new TerrainService(path.join(cacheDir(), "dem"));
   const imagery = new ImageryService(path.join(cacheDir(), "imagery"));
 
+  const briefs = new BriefService(ephemeral ? null : workDir, llm, memory);
+
   const registry = new CapabilityRegistry();
   for (const capability of [
     ...missionCapabilities({ memory }),
@@ -73,13 +77,14 @@ export function createPlatform(options: PlatformOptions = {}): Platform {
     registry.register(capability);
   }
 
-  const sessions = new SessionManager({ registry, memory, llm, knowledge, audit, assetsDir, dataDir: ephemeral ? null : workDir, scratchDir: path.join(workDir, "staging") });
+  const sessions = new SessionManager({ registry, memory, llm, knowledge, briefs, audit, assetsDir, dataDir: ephemeral ? null : workDir, scratchDir: path.join(workDir, "staging") });
   const mcp = new McpBridge(registry);
 
   return {
     registry,
     memory,
     knowledge,
+    briefs,
     terrain,
     imagery,
     llm,

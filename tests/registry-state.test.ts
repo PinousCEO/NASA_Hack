@@ -166,11 +166,11 @@ describe("dependency-aware recalculation", () => {
   it("limits a spacecraft component change to the nodes that read components, and a rover change to rover performance", () => {
     app = createApp();
     const panel = change("spacecraft.components.sp1.areaM2", 2.4);
-    expect(panel.next.recalculated.sort()).toEqual(["comms.link", "cost.budget", "data.budget", "mass.budget", "power.budget", "science.return"]);
+    expect(panel.next.recalculated.sort()).toEqual(["adcs.pointing", "comms.link", "cost.budget", "data.budget", "launch.vehicle", "mass.budget", "power.budget", "schedule.budget", "science.return", "systems.wiring"]);
     const gen = (d: typeof panel.head.derived): number => (d["power.budget"]!.value as { sunlitGenerationW: number }).sunlitGenerationW;
     expect(gen(panel.next.derived)).toBeCloseTo(2 * gen(panel.head.derived), 6);
     const rover = change("rover.wheelTorqueNm", 0.2);
-    expect(rover.next.recalculated.sort()).toEqual(["cost.budget", "rover.performance"]);
+    expect(rover.next.recalculated.sort()).toEqual(["cost.budget", "rover.performance", "schedule.budget"]);
     expect(engineeringChecks(parseMissionConfigOrThrow(applyPatch(app.store.head().config as unknown, { op: "set", path: "rover.wheelTorqueNm", value: 0.2 })), rover.next.derived).find((c) => c.id === "rover.slope")!.status).toBe("fail");
   });
 });
