@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, type Evaluation, fmt, type Presence, type Snapshot } from "@/lib/api";
 import type { Collab, Patch } from "@/lib/collab";
 import { BODY_RADIUS_KM } from "@/lib/scene/MissionScene";
+import { SiteSurvey, TrajectoryPanel } from "./MissionExtras";
 
 export interface Ctx {
   sid: string;
@@ -226,7 +227,7 @@ export function AiPanel({ c }: { c: Ctx }) {
     const reason = action === "reject" ? (window.prompt("Reason for rejecting:") ?? "") : "Approved in workspace";
     try { await api("POST", `/api/sessions/${c.sid}/proposals/${id}/${action}`, { reason }); c.reloadLists(); } catch (err) { c.toast((err as Error).message, "warn"); }
   };
-  const examples = ["Set orbit altitude to 50 km", "Add a 1.5 m2 solar panel", "Compute the link budget", "Simulate the battery over 10 orbits", "Can the rover climb a 20 deg slope?", "Where is Mars?"];
+  const examples = ["Set orbit altitude to 50 km", "Add a 1.5 m2 solar panel", "Compute the link budget", "Create a 3D model of a star tracker telescope with a radiator", "Simulate the battery over 10 orbits", "Can the rover climb a 20 deg slope?", "Where is Mars?"];
   const pending = c.proposals.filter((p) => p.status === "awaiting_approval");
   return (
     <div className="stack">
@@ -350,7 +351,7 @@ export function AnalysisPanel({ c, previewDay }: { c: Ctx; previewDay: number | 
       <button className="btn" disabled={busy !== null || c.role === "viewer" || metrics.length === 0} onClick={run}>{busy === "trade" ? <span className="spinner" /> : "Run trade study"}</button>
       {result && (
         <div className="metric">
-          <Spark series={Object.keys(result.rows[0]?.metrics ?? {}).map((k, i) => ({ label: k.split(".").pop()!, color: ["#4cc9f0", "#ffd166", "#3ddc97", "#b388ff", "#ff8c42", "#f72585"][i % 6]!, values: result.rows.map((r: any) => (typeof r.metrics[k] === "number" ? r.metrics[k] : null)) }))} />
+          <Spark series={Object.keys(result.rows[0]?.metrics ?? {}).map((k, i) => ({ label: k.split(".").pop()!, color: ["#35e0d0", "#ffb020", "#4be38a", "#c58bff", "#ff5a1f", "#ff4b8b"][i % 6]!, values: result.rows.map((r: any) => (typeof r.metrics[k] === "number" ? r.metrics[k] : null)) }))} />
           <table className="data" style={{ marginTop: 8 }}>
             <thead><tr><th>{result.param === "altitude" ? "altitude km" : "value"}</th>{Object.keys(result.rows[0]?.metrics ?? {}).map((k) => <th key={k}>{k.split(".").pop()}</th>)}<th>constraints</th></tr></thead>
             <tbody>{result.rows.map((r: any, i: number) => (
@@ -378,6 +379,9 @@ export function AnalysisPanel({ c, previewDay }: { c: Ctx; previewDay: number | 
           ))}</div>
         </div>
       )}
+      <hr className="hairline" />
+      <TrajectoryPanel c={c} />
+      <SiteSurvey c={c} />
     </div>
   );
 }

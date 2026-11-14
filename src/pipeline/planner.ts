@@ -309,6 +309,9 @@ function recipe(op: Operation): Step[] | null {
     case "retrieve_ephemeris":
       return [{ key: "fetch", need: "data.ephemeris.precise", why: op.description, expectedOutputs: ["positionAu", "distanceKm"], validation: [{ path: "distanceAu", op: ">", value: 0 }] }];
     case "generate_asset":
+      if (!p.assetSpec && typeof p.prompt === "string") {
+        return [{ key: "asset", need: "asset.generative", why: op.description, input: { prompt: p.prompt }, expectedOutputs: ["assetId", "uri", "sceneNodeId"], validation: [{ path: "triangles", op: ">", value: 0 }] }];
+      }
       return [{ key: "asset", need: "asset.glb", why: op.description, expectedOutputs: ["assetId", "uri"], validation: [{ path: "triangles", op: ">", value: 0 }] }];
     case "generate_script":
       return [

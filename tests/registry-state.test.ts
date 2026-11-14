@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { type App, createApp } from "../src/app.js";
 import { applyPatch, applyPatches, diff, getPath } from "../src/core/paths.js";
 import { ResearchMemory } from "../src/memory/memory.js";
+import { z } from "zod";
+import { defineCapability } from "../src/registry/capability.js";
 import { executeDirect } from "../src/registry/direct.js";
 import { DERIVED_NODES, engineeringChecks, recalculate } from "../src/state/recalc.js";
 import { parseMissionConfig } from "../src/state/schema.js";
@@ -52,19 +54,35 @@ describe("capability registry", () => {
     }
   });
 
-  it("never presents a planned capability as usable", async () => {
+  it("never presents a planned or unconfigured capability as usable", async () => {
     app = createApp();
-    const planned = app.registry.list().filter((d) => d.developmentStatus === "planned");
-    expect(planned.map((d) => d.id).sort()).toEqual(["asset.text_to_3d", "data.terrain.dem"]);
-    expect(app.registry.get("gmat.run")!.descriptor.developmentStatus).toBe("experimental");
-    for (const d of planned) {
-      expect(app.registry.isUsable(d)).toBe(false);
-      expect(d.availability.reason).toMatch(/Planned/);
-      await expect(executeDirect(app, d.id, {}, { id: "u", role: "lead" })).rejects.toThrow(/planned, not implemented/);
-    }
+    // Everything registered is implemented; a capability that is only planned must stay visible but unusable.
+    expect(app.registry.list().filter((d) => d.developmentStatus === "planned")).toEqual([]);
+    app.registry.register(defineCapability({
+      id: "science.warp.sizing",
+      name: "Warp drive sizing",
+      description: "Not implemented.",
+      category: "scientific_calculation",
+      provides: ["calc.warp"],
+      input: z.object({}),
+      output: z.object({}),
+      requiredPermissions: ["state:read"],
+      verification: { status: "unverified", method: "No implementation" },
+      developmentStatus: "planned",
+      unavailableReason: "Planned: no model exists",
+      outputVerification: "unverified",
+    }));
+    const planned = app.registry.get("science.warp.sizing")!.descriptor;
+    expect(app.registry.isUsable(planned)).toBe(false);
+    expect(planned.availability.reason).toMatch(/Planned/);
+    await expect(executeDirect(app, planned.id, {}, { id: "u", role: "lead" })).rejects.toThrow(/planned, not implemented/);
     await app.registry.refreshAvailability();
-    expect(app.registry.resolve("asset.generative")).toBeUndefined();
-    expect(app.registry.search({ provides: "asset.generative" })).toHaveLength(1); // still discoverable
+    expect(app.registry.resolve("calc.warp")).toBeUndefined();
+    expect(app.registry.search({ provides: "calc.warp" })).toHaveLength(1); // still discoverable
+    // gmat.run is implemented but needs GMAT_BIN: unavailable, with the reason stated.
+    expect(app.registry.get("gmat.run")!.descriptor.developmentStatus).toBe("experimental");
+    expect(app.registry.resolve("asset.generative")?.id).toBe("asset.text_to_3d");
+    expect(app.registry.resolve("data.terrain.dem")?.id).toBe("data.terrain.dem");
   });
 
   it("discovers capabilities by text, tag, category and permission", () => {

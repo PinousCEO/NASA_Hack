@@ -73,7 +73,8 @@ export class KnowledgeBase {
 
   /** Locate a pdftotext binary: PDFTOTEXT_BIN, or the one on PATH. */
   static pdftotext(): string | null {
-    const candidates = [process.env.PDFTOTEXT_BIN, "pdftotext"].filter((c): c is string => Boolean(c));
+    const gitForWindows = process.platform === "win32" ? [process.env.ProgramFiles, process.env["ProgramFiles(x86)"], process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Programs")].filter((d): d is string => Boolean(d)).map((d) => path.join(d, "Git", "mingw64", "bin", "pdftotext.exe")).filter((f) => existsSync(f)) : [];
+    const candidates = [process.env.PDFTOTEXT_BIN, "pdftotext", ...gitForWindows].filter((c): c is string => Boolean(c));
     for (const bin of candidates) {
       const probe = spawnSync(bin, ["-v"], { encoding: "utf8", windowsHide: true });
       if (!probe.error) return bin;

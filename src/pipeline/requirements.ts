@@ -10,7 +10,7 @@ import { AssetSpecSchema } from "../capabilities/assets.js";
 import { PatchSchema } from "../capabilities/mission.js";
 import type { PatchOp } from "../core/paths.js";
 import { getPath } from "../core/paths.js";
-import { newId } from "../core/types.js";
+import { newId, type VerificationLevel } from "../core/types.js";
 import type { LlmService } from "../llm/llm.js";
 import { BODIES } from "../science/orbital.js";
 import { type Component, ComponentSchema, type MissionConfig } from "../state/schema.js";
@@ -78,13 +78,10 @@ const RULES: Rule[] = [
       [/\b(sphere|ball)\b/i, (d) => ({ kind: "sphere", radiusM: d[0] }), 1],
     ];
     const match = kinds.find(([re]) => re.test(clause));
-    if (!match) {
-      return { missing: [{ field: "assetSpec.kind", blocking: true, question: "Which shape should be generated? Supported parametric shapes: box, cylinder, sphere, solar panel, dish antenna, wheel, rover chassis. (Free-form generative 3D is not implemented.)" }] };
-    }
+    const freeForm = { operations: [{ category: "asset_generation_3d" as const, intent: "generate_asset" as const, description: "Generate a 3D model from the description (text-to-3D)", params: { prompt: clause.slice(0, 600) }, assumptions: ["No exact parametric shape and dimensions were given, so the model is synthesised from the description"] }] };
+    if (!match) return freeForm;
     const [, build, needed] = match;
-    if (dims.length < needed) {
-      return { missing: [{ field: "assetSpec.dimensions", blocking: true, question: `Please give ${needed} dimension(s) in metres for this shape (found ${dims.length}).` }] };
-    }
+    if (dims.length < needed) return freeForm;
     const spec = AssetSpecSchema.safeParse(build(dims));
     if (!spec.success) return { missing: [{ field: "assetSpec", blocking: true, question: `The dimensions are not usable: ${spec.error.issues[0]?.message}` }] };
     return { operations: [{ category: "asset_generation_3d", intent: "generate_asset", description: `Generate a parametric ${spec.data.kind} asset`, params: { assetSpec: spec.data, description: clause.slice(0, 200) }, assumptions: [] }] };
@@ -291,7 +288,7 @@ Each operation has a category, an intent, and a JSON params object. Intents and 
 - compute: { "need": tag, ... } — a calculation. Tags: calc.orbit.elements {altitudeKm?}, calc.orbit.transfer {targetAltitudeKm}, calc.power.budget, calc.comms.link {antennaId?, dataRateBps?}, calc.rover.mobility {slopeDeg?}, calc.ephemeris.sun {time?}.
 - simulate_power: { "orbits"?: number }
 - retrieve_ephemeris: { "target": "sun"|"earth"|"moon"|"mars", "center"?: same set, "time"?: ISO-8601 }
-- generate_asset: { "assetSpec": {"kind":"box"|"cylinder"|"sphere"|"solar_panel"|"dish_antenna"|"wheel"|"rover_chassis", ...dimensions in metres}, "description"?: string }
+- generate_asset: either { "assetSpec": {"kind":"box"|"cylinder"|"sphere"|"solar_panel"|"dish_antenna"|"wheel"|"rover_chassis", ...dimensions in metres}, "description"?: string } for an exact parametric shape, or { "prompt": string } for a free-form object described in words (text-to-3D).
 - generate_script: { "task": string, "name": string, "permissions"?: ["state:read","state:propose","calc"], "scriptId"?: id of an attached script to modify (category code_modification) }
 - run_script: { "scriptId": string, "input"?: object }
 - search_memory: { "query": string }
@@ -301,14 +298,24 @@ Rules:
 - Ground every path and id in the mission configuration you are given. Do not invent paths.
 - If the request leaves out a value that materially changes the outcome and has no safe default, add a missingInformation entry with blocking=true instead of guessing. Ask only what is necessary; when a conventional default exists, use it and record it under assumptions.
 - A request may contain several operations; keep them in the order they should happen.
-- Do not judge feasibility or scientific validity here; later stages do that with calculations.`;
+- Do not judge feasibility or scientific validity here; later stages do that with calculations.
+- Reference material, when present, is retrieved background with its evidence level. Use it to interpret terminology and conventions; it never overrides the mission configuration.`;
+
+/** Returns a citation-numbered context block for a query (the RAG hook). */
+export type KnowledgeRetriever = (query: string) => { context: string; citations: { n: number; id: string; source: string; verification: VerificationLevel }[] };
 
 export class RequirementAnalyzer {
-  constructor(private readonly llm: LlmService) {}
+  constructor(private readonly llm: LlmService, private readonly retrieve?: KnowledgeRetriever) {}
 
   async analyze(text: string, mission: MissionVersion, signal?: AbortSignal): Promise<StructuredRequirement> {
     if (!this.llm.status().available) return analyzeRuleBased(text, mission);
     const { assets: _a, scripts, scene, ...core } = mission.config;
+    let retrieved: ReturnType<KnowledgeRetriever> | null = null;
+    try {
+      retrieved = this.retrieve?.(text) ?? null;
+    } catch {
+      retrieved = null; // retrieval is an aid, never a reason to fail a request
+    }
     const parsed = await this.llm.structured({
       system: ANALYSIS_SYSTEM,
       schema: LlmRequirement,
@@ -318,6 +325,7 @@ export class RequirementAnalyzer {
         `Scene node ids: ${scene.nodes.map((n) => n.id).join(", ") || "(none)"}`,
         `Attached scripts: ${scripts.map((s) => `${s.id} (${s.name})`).join(", ") || "(none)"}`,
         `Derived results:\n${JSON.stringify(Object.fromEntries(Object.entries(mission.derived).map(([k, v]) => [k, k === "orbit.trajectory" ? "(omitted)" : v.value])))}`,
+        ...(retrieved?.context ? [`Reference material (retrieved from the research knowledge base):\n${retrieved.context}`] : []),
         `User request:\n${text}`,
       ].join("\n\n"),
     });
@@ -344,7 +352,7 @@ export class RequirementAnalyzer {
       summary: parsed.summary,
       operations,
       missingInformation: missing,
-      analysis: { method: "llm", modelId: this.llm.modelId, verification: "model_judgment" },
+      analysis: { method: "llm", modelId: this.llm.modelId, verification: "model_judgment", ...(retrieved?.citations.length ? { retrievedSources: retrieved.citations.map((c) => ({ n: c.n, id: c.id, source: c.source, verification: c.verification })) } : {}) },
       missionVersionInspected: mission.version,
     };
   }
@@ -362,6 +370,7 @@ function validateParams(intent: Intent, params: unknown): string | null {
     case "add_component":
       return issue(ComponentSchema.safeParse(p.component));
     case "generate_asset":
+      if (p.assetSpec === undefined && typeof p.prompt === "string" && p.prompt.trim().length >= 3) return null;
       return issue(AssetSpecSchema.safeParse(p.assetSpec));
     case "compute":
       return typeof p.need === "string" ? null : "need (capability tag) is missing";

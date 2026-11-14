@@ -28,7 +28,7 @@ if (!existsSync(path.join(ROOT, "apps", "web", "out", "index.html"))) {
 }
 
 const dataDir = mkdtempSync(path.join(os.tmpdir(), "mission-e2e-"));
-const server = spawn(process.execPath, ["--import", "tsx", path.join(ROOT, "src", "server", "main.ts")], { cwd: ROOT, env: { ...process.env, PORT: String(PORT), MISSION_DATA_DIR: dataDir, ANTHROPIC_API_KEY: "" }, stdio: ["ignore", "pipe", "pipe"] });
+const server = spawn(process.execPath, ["--import", "tsx", path.join(ROOT, "src", "server", "main.ts")], { cwd: ROOT, env: { ...process.env, PORT: String(PORT), MISSION_DATA_DIR: dataDir, ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "", LLM_PROVIDER: "" }, stdio: ["ignore", "pipe", "pipe"] });
 let serverLog = "";
 server.stdout.on("data", (d) => (serverLog += d));
 server.stderr.on("data", (d) => (serverLog += d));
@@ -53,6 +53,7 @@ try {
   const open = async (name) => {
     const context = await browser.newContext({ viewport: { width: 1680, height: 980 } });
     const page = await context.newPage();
+    page.setDefaultTimeout(90000); // three software-rendered 3D pages share one CPU
     page.on("pageerror", (e) => errors.push(`${name}: ${e.message}`));
     page.on("console", (m) => m.type() === "error" && !/favicon|GPU stall|WebGL|swiftshader/i.test(m.text()) && errors.push(`${name}: ${m.text()}`));
     return page;
@@ -94,8 +95,9 @@ try {
   const sessionUrl = lead.url();
   check("mission workspace opens with an IWSDK world", await lead.evaluate(() => Boolean(window.__workspace?.scene.mission?.config.centralBody)));
   check("desktop fallback: XR reported unavailable with a reason", await lead.evaluate(() => { const s = window.__workspace.support; return !s.immersiveAr && !s.immersiveVr && typeof s.reason === "string" && s.reason.length > 10; }), await lead.evaluate(() => window.__workspace.support.reason));
-  await wait(1500);
+  await wait(7000); // arrival fly-in and title card
   await lead.screenshot({ path: path.join(shots, "03-workspace-orbit.png") });
+  check("the planet is textured from NASA imagery (not the procedural fallback)", await lead.evaluate(() => window.__workspace.scene.planetReady), "LROC WAC tiles through the platform proxy");
   // Decode a screenshot of the middle of the stage in the page and count non-dark pixels.
   const shot = (await lead.screenshot({ clip: { x: 640, y: 290, width: 400, height: 400 } })).toString("base64");
   const pixel = await lead.evaluate(async (b64) => { const bmp = await createImageBitmap(await (await fetch(`data:image/png;base64,${b64}`)).blob()); const c = new OffscreenCanvas(100, 100); const x = c.getContext("2d"); x.drawImage(bmp, 0, 0, 100, 100); const d = x.getImageData(0, 0, 100, 100).data; let lit = 0; for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 90) lit++; return lit; }, shot);
@@ -131,17 +133,32 @@ try {
   check("a catalogue component is built by the pipeline and deployed to both participants", true);
   await lead.getByRole("button", { name: "Systems" }).click();
   await wait(2500);
-  const glbLoaded = await lead.evaluate(() => { let meshes = 0; window.__workspace.scene.componentObjects.get("inst1")?.traverse((o) => { if (o.isMesh && o.parent?.parent?.type === "Group") meshes++; }); return meshes; });
-  check("the generated GLB asset is loaded into the systems view", glbLoaded > 0, `${glbLoaded} mesh(es) under the component`);
+  const modelMeshes = await lead.evaluate(() => { let meshes = 0; window.__workspace.scene.componentObjects.get("inst1")?.traverse((o) => { if (o.isMesh) meshes++; }); return meshes; });
+  check("the new component appears in the systems view as a flight-hardware model", modelMeshes >= 5, `${modelMeshes} meshes in the instrument model`);
+
+  // ---- Text-to-3D: described object → shape program → validated GLB → approval → loaded into the scene ----
+  await lead.getByRole("button", { name: /^AI/ }).click();
+  await lead.locator("textarea").fill("Create a 3D model of a star tracker telescope with a radiator");
+  await lead.getByRole("button", { name: "Send" }).click();
+  const approve = lead.getByRole("button", { name: "Approve & deploy" }).first();
+  const previewed = await approve.waitFor({ timeout: 20000 }).then(() => true, () => false);
+  check("a text-to-3D request is previewed and waits for approval (model-judgment evidence is never auto-published)", previewed);
+  if (previewed) await approve.click();
+  const glbShown = await lead.waitForFunction(() => window.__workspace.scene.loadedAssets > 0 && window.__workspace.scene.freeObjects.size > 0, null, { timeout: 20000 }).then(() => true, () => false);
+  const glbMeshes = await lead.evaluate(() => { let meshes = 0; for (const o of window.__workspace.scene.freeObjects.values()) o.getObjectByName("glb")?.traverse((m) => { if (m.isMesh) meshes++; }); return meshes; });
+  check("the generated, versioned GLB is loaded into the systems view", glbShown && glbMeshes > 0, `${glbMeshes} mesh(es) from the GLB`);
+  await flight.waitForFunction(() => window.__workspace.scene.mission.config.scene.nodes.some((n) => !n.componentId && n.assetId), null, { timeout: 15000 }).then(() => check("the generated asset is synchronised to the other participant", true), () => check("the generated asset is synchronised to the other participant", false));
+  await wait(1500);
   await lead.screenshot({ path: path.join(shots, "04-workspace-systems.png") });
 
   // ---- AI runtime builder, analysis and evaluation dashboard ----
-  await lead.getByRole("button", { name: /^AI/ }).click();
   await lead.locator("textarea").fill("Compute the link budget");
   await lead.getByRole("button", { name: "Send" }).click();
   const planned = await lead.waitForSelector(".plan-step.succeeded:has-text(\"science.comms.link_budget\")", { timeout: 20000 }).then(() => true, () => false);
   check("a natural-language request runs through the pipeline and shows its plan", planned);
   await lead.getByRole("button", { name: "analysis", exact: true }).click();
+  await lead.getByRole("button", { name: "Propagate" }).click();
+  await lead.waitForFunction(() => window.__workspace.scene.mission.config.scene.trajectories.length === 1, null, { timeout: 20000 }).then(() => check("a J2-propagated trajectory overlay is published to the scene", true), () => check("a J2-propagated trajectory overlay is published to the scene", false));
   await lead.getByRole("button", { name: "Run mission simulation" }).click();
   await lead.waitForSelector("text=Data returned", { timeout: 20000 });
   check("the mission simulation runs and reports KPIs", true);
@@ -200,7 +217,7 @@ try {
 
   // ---- Research page ----
   await lead.goto(`${BASE}/research`);
-  await lead.waitForSelector("table.data tbody tr", { timeout: 15000 });
+  await lead.waitForSelector("table.data tbody tr", { timeout: 60000 });
   check("research records from this session are listed", (await lead.locator("table.data tbody tr").count()) > 3);
   await lead.screenshot({ path: path.join(shots, "08-research.png") });
 

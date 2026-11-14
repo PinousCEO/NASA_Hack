@@ -1,6 +1,6 @@
 /**
- * 3D asset capabilities. Generation is procedural (parametric geometry → GLB); there is
- * no generative text-to-3D model behind this, and the registry says so explicitly.
+ * Parametric 3D asset capabilities (dimensioned geometry → GLB). Free-form text-to-3D
+ * lives in text3d.ts.
  */
 import { z } from "zod";
 import { box, buildGlb, cylinder, gltfJsonToGlb, type MeshPart, paraboloid, sphere, translate, yToX } from "../assets/glb.js";
@@ -145,20 +145,6 @@ export function assetCapabilities(): Capability[] {
         output: ctx.draft.stageGlb(gltfJsonToGlb(input.gltfJson), { generator: "asset.gltf_to_glb@1.0.0", description: input.description }),
         assumptions: ["Textures and external resources are not supported"],
       }),
-    }),
-    defineCapability({
-      id: "asset.text_to_3d",
-      name: "Generative text-to-3D",
-      description: "Generate a free-form 3D model from a text description using a generative model. NOT IMPLEMENTED: no generative 3D service is integrated.",
-      category: "asset_generation",
-      provides: ["asset.generative"],
-      input: z.object({ prompt: z.string() }),
-      output: z.object({ assetId: z.string() }),
-      requiredPermissions: ["asset:write", "network:external"],
-      verification: { status: "unverified", method: "No implementation" },
-      developmentStatus: "planned",
-      unavailableReason: "Planned: requires integrating an external generative 3D service",
-      outputVerification: "model_judgment",
     }),
   ];
 }

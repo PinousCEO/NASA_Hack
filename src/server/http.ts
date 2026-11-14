@@ -15,6 +15,7 @@ import { PROJECT_ROOT } from "../app.js";
 import { CapabilityError } from "../core/types.js";
 import { SCENARIOS } from "../game/scenarios.js";
 import { createMcpServer } from "../mcp/server.js";
+import { ImageryError } from "../nasa/imagery.js";
 import type { MemoryKind } from "../memory/memory.js";
 import { CONCEPT_MATURITY_LEVELS, DISCIPLINES, LIFE_CYCLE_PHASES, MISSION_SEGMENTS, POINT_DESIGN_MARGINS } from "../nasa/lifecycle.js";
 import { type Account, AuthError } from "../platform/auth.js";
@@ -117,7 +118,7 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
       res.setHeader("access-control-allow-origin", origin);
       res.setHeader("access-control-allow-credentials", "true");
       res.setHeader("access-control-allow-headers", "content-type, authorization");
-      res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
+      res.setHeader("access-control-allow-methods", "GET, POST, DELETE, OPTIONS");
       res.setHeader("vary", "origin");
     }
     if (method === "OPTIONS") {
@@ -195,6 +196,40 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
     if (route === "GET /reference") return json(200, { lifeCycle: LIFE_CYCLE_PHASES, segments: MISSION_SEGMENTS, conceptMaturityLevels: CONCEPT_MATURITY_LEVELS, disciplines: DISCIPLINES, pointDesignMargins: POINT_DESIGN_MARGINS });
     if (route === "GET /leaderboard") {
       return json(200, sessions.leaderboard({ ...(url.searchParams.get("scenario") ? { scenarioId: url.searchParams.get("scenario")! } : {}), ...(url.searchParams.get("difficulty") ? { difficulty: url.searchParams.get("difficulty")! } : {}) }));
+    }
+    // NASA imagery and terrain: read-only, allow-listed, cached. Public so the landing page can use them.
+    if (resource === "imagery" && method === "GET") {
+      if (!id) return json(200, platform.imagery.manifest());
+      const [z, row, col] = [action, subId, (subAction ?? "").replace(/[.]jpe?g$/i, "")].map(Number);
+      try {
+        const bytes = await platform.imagery.tile(id, z!, row!, col!);
+        res.writeHead(200, { "content-type": "image/jpeg", "content-length": bytes.length, "cache-control": "public, max-age=2592000, immutable" });
+        return void res.end(bytes);
+      } catch (err) {
+        if (err instanceof ImageryError) throw new HttpError(err.status, err.message);
+        throw err;
+      }
+    }
+    if (resource === "terrain" && method === "GET") {
+      if (id !== "moon" && id !== "mars") throw new HttpError(404, "Terrain is available for the Moon and Mars");
+      try {
+        if (action === "raster") {
+          const raster = await platform.terrain.raster(id, Number(url.searchParams.get("width") ?? 1440));
+          res.writeHead(200, { "content-type": "application/octet-stream", "content-length": raster.data.length, "cache-control": "public, max-age=2592000, immutable", "x-terrain-width": raster.width, "x-terrain-height": raster.height, "x-terrain-min-m": raster.minM, "x-terrain-max-m": raster.maxM });
+          return void res.end(raster.data);
+        }
+        if (action === "survey") {
+          const lat = Number(url.searchParams.get("lat"));
+          const lon = Number(url.searchParams.get("lon"));
+          const radius = url.searchParams.get("radiusKm");
+          if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 360) throw new HttpError(400, "lat and lon are required (degrees, east longitude)");
+          return json(200, await platform.terrain.survey(id, lat, lon, radius ? Math.min(2000, Math.max(1, Number(radius) || 0)) : undefined));
+        }
+      } catch (err) {
+        if (err instanceof CapabilityError) throw new HttpError(502, err.message);
+        throw err;
+      }
+      throw new HttpError(404, "Not found");
     }
     if (route === "GET /scenarios") {
       return json(200, SCENARIOS.map((s) => ({ id: s.id, title: s.title, tagline: s.tagline, destination: s.destination, briefing: s.briefing, scienceQuestions: s.scienceQuestions, references: s.references, objectives: s.objectives.map((o) => ({ id: o.id, title: o.title, description: o.description, category: o.category, weight: o.weight })), disciplines: DISCIPLINES.filter((d) => s.disciplines.includes(d.id)), catalogSize: s.catalog.length })));
@@ -408,6 +443,12 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
         if (typeof body.version !== "number") throw new HttpError(400, "version (number) is required");
         return json(200, { version: session.rollback(account.id, body.version, typeof body.reason === "string" ? body.reason : "").version });
       }
+      if (action === "trajectories" && method === "POST") {
+        const body = await readJson(req);
+        const record = session.addTrajectory(account.id, body as never);
+        return json(202, body.wait === true ? await session.requests.wait(record.id) : record);
+      }
+      if (action === "trajectories" && method === "DELETE" && subId) return json(202, session.removeTrajectory(account.id, subId));
       if (action === "simulate" && method === "POST") return json(200, session.runSimulation(account.id));
       if (action === "trade" && method === "POST") return json(200, await session.runTradeStudy(account.id, (await readJson(req)) as never));
       if (action === "notes" && method === "POST") {

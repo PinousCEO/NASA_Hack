@@ -100,6 +100,9 @@ export const RoverSchema = z.object({
   site: z.object({
     body: bodyId,
     name: z.string(),
+    /** Planetocentric site coordinates (east longitude), when known. */
+    latDeg: z.number().min(-90).max(90).optional(),
+    lonDeg: z.number().min(-360).max(360).optional(),
     slopeDeg: z.number().min(0).max(89),
     tractionCoefficient: z.number().positive(),
     rollingResistanceCoefficient: z.number().min(0),
@@ -116,6 +119,19 @@ export const SceneNodeSchema = z.object({
   position: z.tuple([z.number(), z.number(), z.number()]).default([0, 0, 0]),
   rotationEulerDeg: z.tuple([z.number(), z.number(), z.number()]).default([0, 0, 0]),
   scale: z.tuple([z.number(), z.number(), z.number()]).default([1, 1, 1]),
+});
+
+/** A trajectory drawn over the mission scene: imported from GMAT or propagated numerically. */
+export const TrajectoryOverlaySchema = z.object({
+  id,
+  name: z.string().max(80),
+  /** Where the samples came from, shown to users next to the overlay. */
+  source: z.enum(["gmat_report", "j2_propagation"]),
+  verification: z.enum(["external_data", "deterministic_calculation"]),
+  durationS: z.number().nonnegative(),
+  /** Positions in the central body's inertial equatorial frame, km. */
+  pointsKm: z.array(z.tuple([z.number(), z.number(), z.number()])).min(2).max(1500),
+  note: z.string().max(300).default(""),
 });
 
 export const AssetRecordSchema = z.object({
@@ -178,7 +194,10 @@ export const MissionConfigSchema = z.object({
     minElevationDeg: z.number().min(0).max(90),
   }),
   rover: RoverSchema.optional(),
-  scene: z.object({ nodes: z.array(SceneNodeSchema).refine(uniqueIds, "scene node ids must be unique") }),
+  scene: z.object({
+    nodes: z.array(SceneNodeSchema).refine(uniqueIds, "scene node ids must be unique"),
+    trajectories: z.array(TrajectoryOverlaySchema).max(6).refine(uniqueIds, "trajectory ids must be unique").default([]),
+  }),
   assets: z.array(AssetRecordSchema).refine(uniqueIds, "asset ids must be unique"),
   scripts: z.array(ScriptRecordSchema).refine(uniqueIds, "script ids must be unique"),
 });

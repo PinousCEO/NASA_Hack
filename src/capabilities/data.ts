@@ -1,9 +1,9 @@
 /**
- * External data providers. JPL Horizons is a live integration; the terrain DEM provider
- * is registered as planned so the gap is visible to planners and users.
+ * External data providers: JPL Horizons ephemerides and NASA PDS planetary terrain (DEM).
  */
 import { z } from "zod";
 import { CapabilityError } from "../core/types.js";
+import type { TerrainService } from "../nasa/terrain.js";
 import { type Capability, defineCapability } from "../registry/capability.js";
 
 const HORIZONS_URL = "https://ssd.jpl.nasa.gov/api/horizons.api";
@@ -60,7 +60,7 @@ async function horizonsFetch(params: Record<string, string>, signal: AbortSignal
   return body.result;
 }
 
-export function dataCapabilities(): Capability[] {
+export function dataCapabilities(deps: { terrain: TerrainService }): Capability[] {
   return [
     defineCapability({
       id: "data.horizons.vectors",
@@ -132,18 +132,43 @@ export function dataCapabilities(): Capability[] {
     }),
     defineCapability({
       id: "data.terrain.dem",
-      name: "Planetary terrain elevation (DEM) retrieval",
-      description: "Retrieve a digital elevation model tile for a landing site from a planetary data service. NOT IMPLEMENTED: supply a heightmap to science.terrain.slope_analysis instead.",
+      name: "Planetary terrain elevation (NASA PDS DEM)",
+      description: "Elevation, regional slope and a height patch for a site on the Moon (LRO LOLA LDEM, 4 px/deg) or Mars (MGS MOLA MEGDR, 4 px/deg), read from NASA Planetary Data System products. Resolution is 7.6 km (Moon) / 14.8 km (Mars) per pixel: results describe the region, not lander-scale terrain.",
       category: "external_data",
       provides: ["data.terrain.dem"],
-      input: z.object({ body: z.enum(["moon", "mars"]), latDeg: z.number(), lonDeg: z.number(), sizeKm: z.number().positive() }),
-      output: z.object({ heightsM: z.array(z.array(z.number())), cellSizeM: z.number() }),
+      input: z.object({
+        body: z.enum(["moon", "mars"]),
+        latDeg: z.number().min(-90).max(90),
+        lonDeg: z.number().min(-360).max(360).describe("East longitude"),
+        radiusKm: z.number().positive().max(2000).optional().describe("Radius of the neighbourhood surveyed; defaults to two grid cells"),
+        patchSamples: z.number().int().min(3).max(33).default(9),
+      }),
+      output: z.object({
+        body: z.string(), latDeg: z.number(), lonDeg: z.number(), elevationM: z.number(), regionalSlopeDeg: z.number(), downhillAzimuthDeg: z.number(), baselineKm: z.number(),
+        minM: z.number(), maxM: z.number(), reliefM: z.number(), roughnessRmsM: z.number(), resolutionKmPerPixel: z.number(), product: z.string(), datum: z.string(), credit: z.string(), caveats: z.array(z.string()),
+        heightsM: z.array(z.array(z.number())), cellSizeM: z.number(),
+      }),
       requiredPermissions: ["network:external"],
+      constraints: { timeoutMs: 90000, maxRetries: 1, idempotent: true, effect: "external_read" },
       resources: { network: true },
-      verification: { status: "unverified", method: "No implementation" },
-      developmentStatus: "planned",
-      unavailableReason: "Planned: no planetary DEM service (e.g. LOLA/MOLA products) is integrated yet",
+      dependencies: ["NASA PDS Geosciences Node (pds-geosciences.wustl.edu)"],
+      verification: { status: "verified", method: "Live test against known topography: lunar and Martian global extremes, Olympus Mons, Hellas Planitia (tests/nasa.live.test.ts)" },
       outputVerification: "external_data",
+      references: ["https://pds-geosciences.wustl.edu/missions/lro/lola.htm", "https://pds-geosciences.wustl.edu/missions/mgs/megdr.html"],
+      run: async (input) => {
+        const survey = await deps.terrain.survey(input.body, input.latDeg, input.lonDeg, input.radiusKm);
+        const patch = await deps.terrain.patch(input.body, input.latDeg, input.lonDeg, survey.baselineKm, input.patchSamples);
+        return { output: { ...survey, ...patch }, assumptions: survey.caveats };
+      },
+      defaultInput: ({ config, params }) => {
+        const site = config.rover?.site;
+        return {
+          body: params.body ?? site?.body ?? config.centralBody,
+          latDeg: typeof params.latDeg === "number" ? params.latDeg : site?.latDeg,
+          lonDeg: typeof params.lonDeg === "number" ? params.lonDeg : site?.lonDeg,
+          ...(typeof params.radiusKm === "number" ? { radiusKm: params.radiusKm } : {}),
+        };
+      },
     }),
   ];
 }

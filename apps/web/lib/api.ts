@@ -11,7 +11,7 @@ export class ApiError extends Error {
   }
 }
 
-export async function api<T = any>(method: "GET" | "POST", route: string, body?: unknown): Promise<T> {
+export async function api<T = any>(method: "GET" | "POST" | "DELETE", route: string, body?: unknown): Promise<T> {
   const res = await fetch(`${CORE_ORIGIN}${route}`, {
     method,
     credentials: "include",

@@ -139,7 +139,7 @@ export const SCENARIOS: Scenario[] = [
           { id: "rbat1", type: "battery", name: "Rover battery", massKg: 2.4, capacityWh: 300, maxDepthOfDischarge: 0.6, costMusd: 0.4 },
           { id: "rcpu", type: "load", name: "Rover avionics", massKg: 1.8, powerW: 18, dutyCycle: 1, costMusd: 2.5 },
         ],
-        site: { body: "moon", name: "Shackleton connecting ridge", slopeDeg: 12, tractionCoefficient: 0.55, rollingResistanceCoefficient: 0.15 },
+        site: { body: "moon", name: "Shackleton connecting ridge", latDeg: -89.45, lonDeg: 222.7, slopeDeg: 12, tractionCoefficient: 0.55, rollingResistanceCoefficient: 0.15 },
       },
       scene: { nodes: [] },
       assets: [],

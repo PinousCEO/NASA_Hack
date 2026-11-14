@@ -58,7 +58,7 @@ export interface StructuredRequirement {
   summary: string;
   operations: Operation[];
   missingInformation: MissingInformation[];
-  analysis: { method: "llm" | "rule_based"; modelId?: string; verification: VerificationLevel };
+  analysis: { method: "llm" | "rule_based"; modelId?: string; verification: VerificationLevel; retrievedSources?: { n: number; id: string; source: string; verification: VerificationLevel }[] };
   missionVersionInspected: number;
 }
 

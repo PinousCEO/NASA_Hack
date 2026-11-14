@@ -10,11 +10,13 @@ import { fileURLToPath } from "node:url";
 import { assetCapabilities } from "./capabilities/assets.js";
 import { codeCapabilities } from "./capabilities/code.js";
 import { dataCapabilities } from "./capabilities/data.js";
+import { text3dCapabilities } from "./capabilities/text3d.js";
+import { TerrainService } from "./nasa/terrain.js";
 import { missionCapabilities } from "./capabilities/mission.js";
 import { nasaCapabilities } from "./capabilities/nasa.js";
 import { KnowledgeBase } from "./knowledge/knowledge.js";
 import { scienceCapabilities } from "./capabilities/science.js";
-import { AnthropicLlm, type LlmService } from "./llm/llm.js";
+import { createLlm, type LlmService } from "./llm/llm.js";
 import { McpBridge } from "./mcp/bridge.js";
 import { ResearchMemory } from "./memory/memory.js";
 import { ProposalService } from "./pipeline/proposals.js";
@@ -23,6 +25,8 @@ import { CapabilityRegistry } from "./registry/registry.js";
 import { loadSeedMission, MissionStore } from "./state/store.js";
 
 export const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+/** Downloaded NASA products (DEMs, map tiles). A cache, not state: safe to delete, shared by all data directories. */
+export const cacheDir = (): string => process.env.MISSION_CACHE_DIR ?? path.join(PROJECT_ROOT, ".data", "cache");
 
 export interface AppOptions {
   /** Persistent data directory. Omit for an ephemeral app (tests): state lives in memory and a temp dir. */
@@ -47,7 +51,7 @@ export function createApp(options: AppOptions = {}): App {
   const ephemeral = options.dataDir === undefined;
   const workDir = options.dataDir ?? mkdtempSync(path.join(os.tmpdir(), "mission-ai-"));
   const assetsDir = path.join(workDir, "assets");
-  const llm = options.llm ?? new AnthropicLlm();
+  const llm = options.llm ?? createLlm();
 
   const store = new MissionStore(ephemeral ? null : path.join(workDir, "mission"));
   if (store.isEmpty) {
@@ -61,7 +65,8 @@ export function createApp(options: AppOptions = {}): App {
     ...scienceCapabilities(),
     ...assetCapabilities(),
     ...codeCapabilities({ llm }),
-    ...dataCapabilities(),
+    ...text3dCapabilities({ llm }),
+    ...dataCapabilities({ terrain: new TerrainService(path.join(cacheDir(), "dem")) }),
     ...nasaCapabilities({ knowledge: new KnowledgeBase(memory, null) }),
   ]) {
     registry.register(capability);

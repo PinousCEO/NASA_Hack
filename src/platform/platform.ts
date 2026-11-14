@@ -2,15 +2,18 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { PROJECT_ROOT } from "../app.js";
+import { cacheDir, PROJECT_ROOT } from "../app.js";
 import { assetCapabilities } from "../capabilities/assets.js";
 import { codeCapabilities } from "../capabilities/code.js";
 import { dataCapabilities } from "../capabilities/data.js";
+import { text3dCapabilities } from "../capabilities/text3d.js";
+import { ImageryService } from "../nasa/imagery.js";
+import { TerrainService } from "../nasa/terrain.js";
 import { missionCapabilities } from "../capabilities/mission.js";
 import { nasaCapabilities } from "../capabilities/nasa.js";
 import { scienceCapabilities } from "../capabilities/science.js";
 import { KnowledgeBase } from "../knowledge/knowledge.js";
-import { AnthropicLlm, type LlmService } from "../llm/llm.js";
+import { createLlm, type LlmService } from "../llm/llm.js";
 import { McpBridge } from "../mcp/bridge.js";
 import { ResearchMemory } from "../memory/memory.js";
 import { CapabilityRegistry } from "../registry/registry.js";
@@ -35,6 +38,8 @@ export interface Platform {
   auth: AuthService;
   audit: AuditLog;
   sessions: SessionManager;
+  terrain: TerrainService;
+  imagery: ImageryService;
   assetsDir: string;
   documentsDir: string;
   close(): Promise<void>;
@@ -45,12 +50,15 @@ export function createPlatform(options: PlatformOptions = {}): Platform {
   const workDir = options.dataDir ?? mkdtempSync(path.join(os.tmpdir(), "mission-platform-"));
   const assetsDir = path.join(workDir, "assets");
   const documentsDir = options.documentsDir ?? path.join(PROJECT_ROOT, "Data");
-  const llm = options.llm ?? new AnthropicLlm();
+  const llm = options.llm ?? createLlm();
 
   const audit = new AuditLog(ephemeral ? null : path.join(workDir, "audit"));
   const auth = new AuthService(ephemeral ? null : path.join(workDir, "auth"));
   const memory = new ResearchMemory(ephemeral ? null : path.join(workDir, "memory"));
   const knowledge = new KnowledgeBase(memory, ephemeral ? null : path.join(workDir, "knowledge"));
+
+  const terrain = new TerrainService(path.join(cacheDir(), "dem"));
+  const imagery = new ImageryService(path.join(cacheDir(), "imagery"));
 
   const registry = new CapabilityRegistry();
   for (const capability of [
@@ -58,19 +66,22 @@ export function createPlatform(options: PlatformOptions = {}): Platform {
     ...scienceCapabilities(),
     ...assetCapabilities(),
     ...codeCapabilities({ llm }),
-    ...dataCapabilities(),
+    ...text3dCapabilities({ llm }),
+    ...dataCapabilities({ terrain }),
     ...nasaCapabilities({ knowledge }),
   ]) {
     registry.register(capability);
   }
 
-  const sessions = new SessionManager({ registry, memory, llm, audit, assetsDir, dataDir: ephemeral ? null : workDir, scratchDir: path.join(workDir, "staging") });
+  const sessions = new SessionManager({ registry, memory, llm, knowledge, audit, assetsDir, dataDir: ephemeral ? null : workDir, scratchDir: path.join(workDir, "staging") });
   const mcp = new McpBridge(registry);
 
   return {
     registry,
     memory,
     knowledge,
+    terrain,
+    imagery,
     llm,
     mcp,
     auth,

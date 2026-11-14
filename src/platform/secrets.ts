@@ -13,6 +13,7 @@ interface SecretSpec {
 }
 
 export const SECRETS: SecretSpec[] = [
+  { name: "OPENAI_API_KEY", purpose: "Language-model request analysis, multi-tool planning, code generation and text-to-3D (OpenAI provider)", required: false },
   { name: "ANTHROPIC_API_KEY", purpose: "Language-model request analysis, multi-tool planning and code generation", required: false },
   { name: "NASA_API_KEY", purpose: "Reserved for NASA Open API providers that require a key (none is required by the built-in providers)", required: false },
   { name: "GMAT_BIN", purpose: "Path to a GMAT console executable, enabling the gmat.run capability", required: false },
@@ -42,5 +43,5 @@ export function redact(text: string): string {
     const value = process.env[s.name];
     if (value && value.length >= 8) out = out.split(value).join(`[${s.name}]`);
   }
-  return out.replace(/sk-ant-[A-Za-z0-9_-]{8,}/g, "[redacted-key]").replace(/Bearer\s+[A-Za-z0-9._~+/=-]{16,}/g, "Bearer [redacted]");
+  return out.replace(/sk-ant-[A-Za-z0-9_-]{8,}/g, "[redacted-key]").replace(/sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{20,}/g, "[redacted-key]").replace(/Bearer\s+[A-Za-z0-9._~+/=-]{16,}/g, "Bearer [redacted]");
 }

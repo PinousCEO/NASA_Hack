@@ -5,6 +5,7 @@
  * are driven by the same authoritative snapshot over the same WebSocket.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Transport, Viewfinder } from "@/components/MissionExtras";
 import { AiPanel, AnalysisPanel, type Ctx, DesignPanel, EvaluationDashboard, LogPanel, ObjectivesPanel, ReviewPanel } from "@/components/MissionPanels";
 import { type Account, api, currentAccount, type Evaluation, fmt, type Presence, type Snapshot } from "@/lib/api";
 import { Collab } from "@/lib/collab";
@@ -53,6 +54,7 @@ export default function MissionPage() {
   const [dashboard, setDashboard] = useState<{ evaluation: Evaluation; submission?: any } | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [you, setYou] = useState<any>(null);
+  const [arriving, setArriving] = useState(false);
 
   const stage = useRef<HTMLDivElement>(null);
   const collab = useRef<Collab | null>(null);
@@ -172,6 +174,13 @@ export default function MissionPage() {
       ws.scene.setMission(snapRef.current!.mission);
       ws.refresh();
       setXr((x) => ({ ...x, support: ws.support }));
+      // Arrival sequence: title card over a camera fly-in from deep space. `?intro=0` skips it.
+      const cinematic = new URLSearchParams(window.location.search).get("intro") !== "0" && new URLSearchParams(window.location.search).get("iwer") !== "1";
+      ws.intro(cinematic);
+      if (cinematic) {
+        setArriving(true);
+        setTimeout(() => setArriving(false), 4600);
+      }
     })().catch((err) => toast(`3D view could not start: ${err.message}`, "bad"));
     return () => { disposed = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -225,7 +234,7 @@ export default function MissionPage() {
           <header className="glass top">
             <a className="brand" href="/lobby" title="Back to missions"><span className="brand-mark" /></a>
             <div className="grow">
-              <div style={{ fontWeight: 600, fontSize: 15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{snap.session.name}</div>
+              <div style={{ font: "800 16px var(--font-display)", fontStretch: "118%", textTransform: "uppercase", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{snap.session.name}</div>
               <div className="dim" style={{ fontSize: 11 }}>{snap.scenario.title} · {snap.session.difficulty} · seed {snap.session.seed}</div>
             </div>
             <div className="phase">{PHASES.map((p, i) => <span key={p} className={`step ${i < phaseIndex ? "done" : i === phaseIndex ? "now" : ""}`}>{p}</span>)}</div>
@@ -245,7 +254,8 @@ export default function MissionPage() {
 
           <aside className="glass left"><ObjectivesPanel c={ctx} /></aside>
           <div className="mid">
-            <button className="btn sm ghost" style={{ position: "absolute", left: 0, top: 0, pointerEvents: "auto" }} onClick={() => setCollapsed(!collapsed)}>{collapsed ? "▸ Objectives" : "◂"}</button>
+            <Viewfinder snap={snap} mode={mode} />
+            <button className="btn sm ghost" style={{ position: "absolute", left: 8, top: 8, pointerEvents: "auto" }} onClick={() => setCollapsed(!collapsed)}>{collapsed ? "▸ Objectives" : "◂"}</button>
             <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(118px, 1fr))", gap: 8, pointerEvents: "auto" }}>
               {tiles.map((t) => (
                 <div key={`${t.k}:${pulsed.nodes.includes(t.node) ? pulsed.key : 0}`} className={`metric glass ${pulsed.nodes.includes(t.node) ? "pulse" : ""}`} title={`From model: ${t.node}`}>
@@ -264,20 +274,18 @@ export default function MissionPage() {
           </aside>
 
           <footer className="glass bottom">
-            <div className="row">
-              <span className="eyebrow" style={{ whiteSpace: "nowrap" }}>Mission timeline</span>
-              <input type="range" min={0} max={duration} step={1} value={previewDay ?? 0} onChange={(e) => setPreviewDay(Number(e.target.value) || null)} title="Preview Sun geometry on a later mission day" />
-              <span className="mono" style={{ width: 210, textAlign: "right", fontSize: 12, whiteSpace: "nowrap" }}>{previewDay ? `day ${previewDay} · preview` : `day 0 · ${snap.mission.config.missionTime.slice(0, 10)}`}</span>
+            <Transport day={previewDay} duration={duration} start={snap.mission.config.missionTime} onDay={setPreviewDay}>
               {previewDay !== null && previewDay > 0 && <>
                 <button className="btn sm" disabled={ctx.role === "viewer" || Boolean(snap.game.submitted)} onClick={() => { const date = new Date(Date.parse(snap.mission.config.missionTime) + previewDay * 86400000).toISOString().replace(/\.\d{3}Z$/, "Z"); void collab.current!.edit([{ op: "set", path: "missionTime", value: date }], `Mission date → ${date.slice(0, 10)}`).then((r) => { if (!r.ok) toast(r.detail ?? "Not accepted", "warn"); setPreviewDay(null); }); }}>Set as mission date</button>
                 <button className="btn sm ghost" onClick={() => setPreviewDay(null)}>Reset</button>
               </>}
-            </div>
+            </Transport>
             {previewDay ? <div className="faint" style={{ fontSize: 11, marginTop: 4 }}>Preview rotates the Sun about the ecliptic pole to show the eclipse arc on that day. Numbers update when the date is set — or run the mission simulation for the whole year.</div> : null}
           </footer>
         </div>
       )}
       {xr.active && <div style={{ position: "absolute", left: 16, bottom: 16, zIndex: 6 }} className="glass card"><b>{xr.mode === "ar" ? "Mixed reality" : "VR"} session active</b><div className="dim">The workspace is on your headset. <button className="btn sm" onClick={() => workspace.current?.exitXr()}>Exit XR</button></div></div>}
+      {arriving && snap && <div className="launch-veil" aria-hidden><div className="count"><span><small>Mission control · link established</small>{snap.mission.config.spacecraft.name}</span></div></div>}
       <div className="toasts">{toasts.map((t) => <div key={t.id} className={`glass toast ${t.out ? "out" : ""}`}><span className={`chip ${t.tone === "info" ? "info" : t.tone}`}><span className="dot" /></span><span>{t.message}</span></div>)}</div>
       {dashboard && snap && <EvaluationDashboard evaluation={dashboard.evaluation} submission={dashboard.submission} title={snap.session.name} onClose={() => setDashboard(null)} />}
     </div>

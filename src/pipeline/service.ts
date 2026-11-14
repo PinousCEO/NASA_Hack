@@ -17,7 +17,7 @@ import { PlanExecutor } from "./executor.js";
 import { assessFeasibility } from "./feasibility.js";
 import { Planner } from "./planner.js";
 import type { ProposalService } from "./proposals.js";
-import { RequirementAnalyzer } from "./requirements.js";
+import { type KnowledgeRetriever, RequirementAnalyzer } from "./requirements.js";
 import type { Operation, Proposal, RequestRecord, RequestStatus, StructuredRequirement, TraceEvent } from "./types.js";
 
 export interface RequestEvents {
@@ -31,6 +31,8 @@ export interface RequestServiceDeps {
   store: MissionStore;
   memory: ResearchMemory;
   llm: LlmService;
+  /** Knowledge retrieval used to ground model-based request analysis. */
+  retrieve?: KnowledgeRetriever;
   proposals: ProposalService;
   /** Directory for draft staging areas and persisted request records; null keeps records in memory only. */
   dataDir: string | null;
@@ -49,7 +51,7 @@ export class RequestService extends EventEmitter<RequestEvents> {
 
   constructor(private readonly deps: RequestServiceDeps) {
     super();
-    this.analyzer = new RequirementAnalyzer(deps.llm);
+    this.analyzer = new RequirementAnalyzer(deps.llm, deps.retrieve);
     this.planner = new Planner(deps.registry, deps.llm);
     this.executor = new PlanExecutor(deps.registry);
     if (deps.dataDir) {

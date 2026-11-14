@@ -14,7 +14,8 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { Collab } from "../collab";
 import { BODY_RADIUS_KM, MissionScene, type ViewMode } from "../scene/MissionScene";
-import { createLabel, createStarfield } from "../scene/space";
+import { gradeRenderer, interceptRender, softwareGl } from "../scene/fx";
+import { createEnvironment, createLabel, createSky, forceQuality } from "../scene/space";
 
 export interface XrSupport {
   webxr: boolean;
@@ -80,6 +81,8 @@ export interface Workspace {
   setSpatialStatus(status: SpatialStatus): void;
   /** Re-sync interactive objects after mission state changed. */
   refresh(): void;
+  /** Frame the sunlit side; with `animate`, fly the camera in from deep space first (desktop only). */
+  intro(animate?: boolean): void;
   /** World-space positions of interactive objects, for automated checks with the XR emulator. */
   debug: { knob(id: string): number[] | null; component(id: string): number[] | null; grabbing(): number; uiVisible(): boolean };
   dispose(): void;
@@ -173,11 +176,29 @@ export async function createWorkspace(container: HTMLElement, callbacks: Workspa
     features: { grabbing: true, locomotion: false, physics: false, sceneUnderstanding: false, spatialUI: false },
   } as any);
 
+  // CPU rasterisers get the light tier: smaller textures, fewer stars, reduced resolution, no post-processing.
+  const slowGpu = softwareGl(world.renderer as THREE.WebGLRenderer);
+  if (slowGpu) {
+    forceQuality("low");
+    (world.renderer as THREE.WebGLRenderer).setPixelRatio(0.6);
+  }
   const scene = new MissionScene();
-  const stars = createStarfield();
-  const backdrop = new THREE.Color(0x02040a);
-  world.scene.add(stars);
+  const sky = createSky();
+  const backdrop = new THREE.Color(0x000000);
+  world.scene.add(sky.object);
   world.scene.background = backdrop;
+  const renderer = world.renderer as THREE.WebGLRenderer;
+  gradeRenderer(renderer);
+  let environment: THREE.Texture | null = null;
+  try {
+    environment = createEnvironment(renderer);
+  } catch {
+    environment = null; // image-based lighting is an enhancement; direct light still works
+  }
+  scene.attach(world.scene as THREE.Scene, environment);
+  // Bloom and film grade on the desktop; `?fx=0` turns them off (slow or software GPUs).
+  const fxOff = typeof location !== "undefined" && new URLSearchParams(location.search).get("fx") === "0";
+  const post = fxOff || slowGpu ? null : interceptRender(renderer, world.scene as THREE.Scene, world.camera as THREE.Camera, () => !inXr);
   const rootEntity = world.createTransformEntity(scene.root);
   const systemsEntity = world.createTransformEntity(scene.systemsView, { parent: rootEntity } as any);
 
@@ -496,11 +517,26 @@ export async function createWorkspace(container: HTMLElement, callbacks: Workspa
   };
 
   let presenceClock = 0;
+  let introT = 1;
+  let introFrom = 0;
+  let introTo = 0;
+  let introAngle = 0;
   const frame = (dt: number): void => {
     if (disposed) return;
     scene.update(dt);
-    (stars.material as THREE.ShaderMaterial).uniforms.uTime!.value += dt;
+    sky.update(dt, renderer.getPixelRatio());
     if (!inXr) {
+      if (introT < 1) {
+        // Arc in from far behind and above, easing out; the user takes over when it lands.
+        introT = Math.min(1, introT + dt / 4.2);
+        const k = 1 - Math.pow(1 - introT, 4);
+        const distance = introFrom + (introTo - introFrom) * k;
+        const swing = (1 - k) * 1.9;
+        world.camera.position.set(Math.sin(introAngle + swing) * distance * 0.86, distance * (0.3 + 0.35 * (1 - k)), Math.cos(introAngle + swing) * distance * 0.86);
+        world.camera.lookAt(0, 0, 0);
+        if (introT >= 1) controls.enabled = true;
+        return;
+      }
       controls.update();
       return;
     }
@@ -542,7 +578,7 @@ export async function createWorkspace(container: HTMLElement, callbacks: Workspa
     inXr = active;
     if (!active) xrMode = null;
     // In passthrough the real room is the backdrop: no starfield, transparent clear.
-    stars.visible = !active || xrMode === "vr";
+    sky.object.visible = !active || xrMode === "vr";
     world.scene.background = active && xrMode === "ar" ? null : backdrop;
     ui.visible = active;
     controls.enabled = !active;
@@ -573,8 +609,24 @@ export async function createWorkspace(container: HTMLElement, callbacks: Workspa
       if (inXr) drawStatus();
     },
     refresh() {
-      layout();
+      if (introT >= 1) layout();
       placeSliders();
+    },
+    intro(animate = true) {
+      if (inXr) return;
+      layout();
+      introTo = world.camera.position.length();
+      introFrom = introTo * 5.5;
+      // Arrive on the day side: 35° off the Sun line, so the terminator and relief are in view.
+      const sun = scene.sunDirection;
+      introAngle = Math.atan2(sun.x, sun.z) + 0.6;
+      if (!animate) {
+        world.camera.position.set(Math.sin(introAngle) * introTo * 0.86, introTo * 0.3, Math.cos(introAngle) * introTo * 0.86);
+        world.camera.lookAt(0, 0, 0);
+        return;
+      }
+      introT = 0;
+      controls.enabled = false;
     },
     debug: {
       knob: (id) => { const k = sliders.find((x) => x.id === id)?.knob; return k ? k.getWorldPosition(new THREE.Vector3()).toArray() : null; },
@@ -588,6 +640,8 @@ export async function createWorkspace(container: HTMLElement, callbacks: Workspa
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointerup", onUp);
       controls.dispose();
+      post?.restore();
+      environment?.dispose();
       try { world.exitXR(); } catch { /* no session */ }
       scene.dispose();
       world.destroy();

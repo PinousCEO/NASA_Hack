@@ -49,7 +49,7 @@ export function codeCapabilities(deps: { llm: LlmService }): Capability[] {
         permissions: z.array(scriptPermission),
         modelId: z.string(),
       }),
-      dependencies: ["Anthropic Messages API"],
+      dependencies: ["Language-model API (OpenAI or Anthropic)"],
       requiredPermissions: ["code:generate", "llm:invoke"],
       resources: { network: true, cpu: "low", typicalDurationMs: 30000 },
       constraints: { timeoutMs: 180000, maxRetries: 1, idempotent: true, effect: "external_read" },

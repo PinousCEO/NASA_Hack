@@ -20,8 +20,11 @@ import { type Role, ROLE_PERMISSIONS, type User } from "../core/types.js";
 import { type Difficulty, generateMission, getScenario, instantiateCatalogItem, type Objective, type Scenario } from "../game/scenarios.js";
 import { type Evaluation, evaluateMission } from "../game/scoring.js";
 import { type MissionSimulation, simulateMission } from "../game/simulation.js";
+import type { KnowledgeBase } from "../knowledge/knowledge.js";
 import type { LlmService } from "../llm/llm.js";
 import type { MemoryKind, ResearchMemory } from "../memory/memory.js";
+import { parseGmatReport } from "../nasa/gmat.js";
+import { propagateJ2 } from "../science/propagate.js";
 import { assessConceptMaturity, type DisciplineId, DISCIPLINES, type MaturityAssessment } from "../nasa/lifecycle.js";
 import { ProposalService } from "../pipeline/proposals.js";
 import { RequestService } from "../pipeline/service.js";
@@ -116,6 +119,7 @@ export interface SessionDeps {
   registry: CapabilityRegistry;
   memory: ResearchMemory;
   llm: LlmService;
+  knowledge?: KnowledgeBase;
   audit: AuditLog;
   assetsDir: string;
   /** Root data directory, or null for in-memory sessions (tests). */
@@ -164,6 +168,7 @@ export class MissionSession extends EventEmitter<SessionEvents> {
       store: this.store,
       memory: deps.memory,
       llm: deps.llm,
+      ...(deps.knowledge ? { retrieve: (query: string) => deps.knowledge!.context(query, { k: 4, maxChars: 3000 }) } : {}),
       proposals: this.proposals,
       dataDir: this.dir,
       stagingDir: this.dir ? path.join(this.dir, "staging") : path.join(deps.scratchDir, meta.id),
@@ -374,6 +379,65 @@ export class MissionSession extends EventEmitter<SessionEvents> {
       summary: `Add ${item.label} to the ${target}`,
       user: { id: accountId, role: m.role },
       operations: [{ category: "component_creation", intent: "add_component", description: `Add ${item.label} to the ${target}`, params: { target, component, withAsset: true }, assumptions: [] }],
+    });
+  }
+
+  /**
+   * Draw a trajectory over the scene. "gmat" parses a GMAT ReportFile the team produced
+   * outside the platform; "j2" propagates the current orbit numerically so nodal precession
+   * becomes visible. Either way the overlay is a proposed design change like any other.
+   */
+  addTrajectory(accountId: string, input: { kind: "gmat"; report: string; name?: string } | { kind: "j2"; days: number }): RequestRecord {
+    const m = this.require(accountId, "engineer");
+    if (this.meta.game.submitted) throw new SessionError("This mission has been submitted.", 409);
+    const config = this.store.head().config;
+    if (config.scene.trajectories.length >= 6) throw new SessionError("A mission can hold six trajectory overlays; remove one first.", 409);
+    const decimate = <T,>(items: T[], max: number): T[] => {
+      const every = Math.max(1, Math.ceil(items.length / max));
+      return items.filter((_, i) => i % every === 0 || i === items.length - 1);
+    };
+    let overlay: Record<string, unknown>;
+    if (input.kind === "gmat") {
+      if (typeof input.report !== "string" || input.report.length < 10 || input.report.length > 20_000_000) throw new SessionError("Paste the text of a GMAT ReportFile (ElapsedSecs, X, Y, Z, VX, VY, VZ).", 400);
+      let parsed;
+      try {
+        parsed = parseGmatReport(input.report);
+      } catch (err) {
+        throw new SessionError(err instanceof Error ? err.message : String(err), 400);
+      }
+      if (parsed.samples.length < 2) throw new SessionError("The report has fewer than two samples.", 400);
+      const samples = decimate(parsed.samples, 1200);
+      overlay = {
+        name: (input.name ?? "GMAT trajectory").slice(0, 80), source: "gmat_report", verification: "external_data",
+        durationS: parsed.samples[parsed.samples.length - 1]!.elapsedS - parsed.samples[0]!.elapsedS,
+        pointsKm: samples.map((s) => s.positionKm),
+        note: `${parsed.samples.length} samples from a GMAT ReportFile; frame and force model are those of the script that produced it`,
+      };
+    } else {
+      const days = Math.min(60, Math.max(0.05, Number(input.days) || 1));
+      const result = propagateJ2({ body: config.centralBody, ...config.orbit }, days * 86400, 20, 1200);
+      overlay = {
+        name: `J2 propagation, ${days} d`, source: "j2_propagation", verification: "deterministic_calculation", durationS: days * 86400,
+        pointsKm: result.samples.map((s) => s.positionKm),
+        note: `RK4 with J2 only; node drift ${result.raanDriftDeg.toFixed(3)} deg over ${days} d. No higher harmonics, third bodies or drag`,
+      };
+    }
+    const id = `traj_${randomBytes(4).toString("hex")}`;
+    this.deps.audit.record({ actor: accountId, action: "trajectory.add", sessionId: this.meta.id, detail: { id, kind: input.kind } });
+    return this.requests.submitOperations({
+      summary: `Overlay ${overlay.name as string}`,
+      user: { id: accountId, role: m.role },
+      operations: [{ category: "simulation", intent: "set_config", description: `Overlay ${overlay.name as string} on the scene`, params: { patches: [{ op: "append", path: "scene.trajectories", value: { id, ...overlay } }], rationale: overlay.note }, assumptions: [] }],
+    });
+  }
+
+  removeTrajectory(accountId: string, trajectoryId: string): RequestRecord {
+    const m = this.require(accountId, "engineer");
+    if (!this.store.head().config.scene.trajectories.some((t) => t.id === trajectoryId)) throw new SessionError("Trajectory not found", 404);
+    return this.requests.submitOperations({
+      summary: "Remove a trajectory overlay",
+      user: { id: accountId, role: m.role },
+      operations: [{ category: "simulation", intent: "set_config", description: "Remove a trajectory overlay", params: { patches: [{ op: "remove", path: `scene.trajectories.${trajectoryId}` }], rationale: "No longer needed" }, assumptions: [] }],
     });
   }
 
