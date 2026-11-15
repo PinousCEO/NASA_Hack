@@ -151,6 +151,12 @@ small set of sentences such as "fly the mission".
 | `npm run typecheck` | Server and web type checks |
 | `node reports/tools/run-all-evidence.mjs` | Every check, on a fresh server without a language model; results in `reports/evidence/` |
 
+### Put it online
+
+The game needs a long-running Node server with WebSockets, so static or serverless hosting (Vercel, Netlify) cannot run it. `render.yaml` describes it as one web service for [Render](https://render.com): New + → Blueprint → this repository. Any host that runs a Node process works the same way: build with `npm install && npm run install:web && npm run build:web`, start with `HOST=0.0.0.0 npm start`, and the server listens on `PORT`.
+
+On a free instance the state in `.data/` is lost when the service restarts. The first account to register is the administrator, so register yours first. Leave `OPENAI_API_KEY` unset on a public server unless you accept that every visitor's requests are billed to it.
+
 ### Mixed reality
 
 | How | Where to open it | What it shows |

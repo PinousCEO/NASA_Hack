@@ -1,0 +1,24 @@
+# Render blueprint: one web service that runs the whole game (the Node server serves the web client too).
+# In Render: New + → Blueprint → pick this repository. The game needs a long-running server with WebSockets,
+# so it cannot run on static or serverless hosting (Vercel, Netlify).
+services:
+  - type: web
+    name: mission-forge
+    runtime: node
+    plan: free
+    buildCommand: npm install --include=dev && npm --prefix apps/web install --include=dev && npm run build:web
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: HOST
+        value: 0.0.0.0
+      # Without a language-model key the game still plays (shelf, wiring, flight, scoring, collaboration, AI crewmates).
+      # The built-in missions are on the board; no new ones are written.
+      - key: BRIEF_AUTOGEN
+        value: "off"
+      # Optional. Set it in the Render dashboard, never in this file. A public server with a key lets every visitor
+      # spend on that key.
+      - key: OPENAI_API_KEY
+        sync: false
