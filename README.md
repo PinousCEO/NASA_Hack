@@ -4,6 +4,11 @@
 A collaborative space-mission design game for the web and mixed reality.<br>
 2026 NASA Space Apps Challenge · Challenge 13, <i>Space Mission Design Game</i></p>
 
+<h2 align="center"><a href="https://mission-forge.onrender.com">▶ PLAY IT NOW — mission-forge.onrender.com</a></h2>
+
+<p align="center">No account needed: pick a nickname and you are in.<br>
+<sub>Free hosting: if nobody has played for a while, the first load takes about a minute to wake up. On a Meta Quest 3, open the same link in the headset's browser and press <b>Enter MR</b>.</sub></p>
+
 <p align="center"><img src="docs/img/mixed-reality-palm.jpg" alt="The mission floating above an open hand in mixed reality, with the web client on the monitor behind" width="88%"></p>
 
 <p align="center">
@@ -192,7 +197,7 @@ directly in the shared mission.
 
 ## Technical overview
 
-There is no hosted instance: the whole game, server included, is in this repository and runs on one machine with the three commands above. A headset on the same network (or over USB) connects to that machine.
+A public instance runs at https://mission-forge.onrender.com (without a language-model key: the parts shelf, wiring, flight, scoring, collaboration and AI crewmates work; free-form requests to the AI are limited to a few known sentences). The whole game, server included, is in this repository and also runs on one machine with the three commands above.
 
 ```mermaid
 flowchart LR
