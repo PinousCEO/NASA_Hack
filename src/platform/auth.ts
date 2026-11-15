@@ -125,6 +125,39 @@ export class AuthService {
     return this.publicView(account);
   }
 
+  /**
+   * Enter with a nickname only: no username, no password, no personal details. A guest account is made for this
+   * browser and a session opened for it. Guests are never administrators, and a nickname cannot end in the suffix
+   * that marks an AI crewmate.
+   */
+  async guest(nickname: string, address = "local"): Promise<{ account: Account; token: string; expiresAt: number }> {
+    const now = Date.now();
+    const key = `guest:${address}`;
+    const recent = (this.attempts.get(key) ?? []).filter((t) => now - t < ATTEMPT_WINDOW_MS);
+    // Many visitors can arrive from one address (a hosting proxy, a classroom): the allowance is wide.
+    if (recent.length >= 240) throw new AuthError("Too many people are entering from this address right now. Try again in a few minutes.", 429);
+    recent.push(now);
+    this.attempts.set(key, recent);
+    const displayName = String(nickname ?? "").replace(/[\u0000-\u001f]/g, "").replace(/(\s*·\s*AI)+\s*$/i, "").trim().slice(0, 24);
+    if (displayName.length < 2) throw new AuthError("Choose a nickname of 2 to 24 characters.", 400);
+    const account: StoredAccount = {
+      id: `u_${randomBytes(8).toString("hex")}`,
+      username: `guest-${randomBytes(6).toString("hex")}`,
+      displayName,
+      role: "member",
+      createdAt: new Date().toISOString(),
+      // Nobody knows this password: a guest comes back through the session kept in the browser, not by signing in.
+      salt: randomBytes(16).toString("hex"),
+      passwordHash: randomBytes(64).toString("hex"),
+    };
+    this.accounts.set(account.id, account);
+    const token = randomBytes(32).toString("base64url");
+    const session: StoredSession = { tokenHash: sha256(token), accountId: account.id, createdAt: Date.now(), expiresAt: Date.now() + SESSION_TTL_MS };
+    this.sessions.set(session.tokenHash, session);
+    this.save();
+    return { account: this.publicView(account), token, expiresAt: session.expiresAt };
+  }
+
   /** Verify credentials and open a session. The returned token is shown once and never stored. */
   async login(username: string, password: string, address = "local"): Promise<{ account: Account; token: string; expiresAt: number }> {
     const lower = String(username ?? "").trim().toLowerCase();

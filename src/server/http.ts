@@ -292,6 +292,18 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
           throw err;
         }
       }
+      if (route === "POST /auth/guest") {
+        // Nickname only: no username, password or personal details are asked for.
+        const body = await readJson(req);
+        try {
+          const { account, token, expiresAt } = await auth.guest(String(body.nickname ?? body.displayName ?? ""), addressOf(req));
+          audit.record({ actor: account.id, action: "auth.guest" });
+          return json(201, { account, expiresAt }, { "set-cookie": sessionCookie(token, Math.floor((expiresAt - Date.now()) / 1000)) });
+        } catch (err) {
+          if (err instanceof AuthError) throw new HttpError(err.status, err.message);
+          throw err;
+        }
+      }
       if (route === "POST /auth/logout") {
         const account = accountOf(req);
         auth.logout(bearerOf(req) ?? cookieOf(req));
