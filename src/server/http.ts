@@ -105,7 +105,7 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
   const secure = Boolean(options.tls);
   const { auth, audit, sessions } = platform;
   // AI crewmates work through this server's own public API, like any other client (see platform/crewmates.ts).
-  const crewmates = new CrewmateService(auth, (platform as { assetsDir?: string }).assetsDir ? path.dirname((platform as { assetsDir?: string }).assetsDir!) : null);
+  const crewmates = new CrewmateService(auth, (platform as { assetsDir?: string }).assetsDir ? path.dirname((platform as { assetsDir?: string }).assetsDir!) : null, COOKIE);
 
   const accountOf = (req: IncomingMessage): Account | undefined => auth.authenticate(bearerOf(req) ?? cookieOf(req));
   const sessionCookie = (token: string, maxAgeS: number): string => `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeS}${secure ? "; Secure" : ""}`;
@@ -409,8 +409,7 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
       if (route === "POST /sessions") {
         const body = await readJson(req);
         const session = sessions.create(account, body as never);
-        // A mission was taken off the board: let the AI write its replacement in the background.
-        if (process.env.BRIEF_AUTOGEN !== "off" && typeof (body as { briefId?: unknown }).briefId === "string") void platform.briefs.keepSupplied((id) => (sessions.briefStats()[id]?.crews ?? 0) > 0, process.env.BRIEF_DAILY_CAP ? { dailyCap: Number(process.env.BRIEF_DAILY_CAP) } : {}).catch(() => undefined);
+        // Taking a mission from the board does not order a new one: one mission is written a day (see main.ts).
         return json(201, { ...session.snapshot(), inviteCode: session.meta.inviteCode });
       }
       const session: MissionSession | undefined = id ? sessions.get(id) : undefined;

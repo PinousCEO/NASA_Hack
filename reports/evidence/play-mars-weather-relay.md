@@ -1,4 +1,4 @@
-# Play-through: mars-weather-relay (seed 9) — 2026-11-15T07:28:23.679Z
+# Play-through: mars-weather-relay (seed 9) — 2026-11-15T09:14:26.991Z
 world: mars · Weather Relay Orbiter · bus 320 kg · limit 493 kg · budget $466M · 687 days · rover: no · ground station 68.2 dBi
 problem: Mars Weather and Relay Orbiter — Forecast the dust. Keep the surface connected. 400 million kilometres from help.
 kit: 4 controls (antenna.dataRate, mission.date, solar.area, launch.vehicle), 6 parts, 4 roles

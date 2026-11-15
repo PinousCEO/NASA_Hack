@@ -1,16 +1,16 @@
-# Headset frame (IWER emulator) — 2026-11-15T07:27:21.137Z — session ms_12c291b14401
+# Headset frame (IWER emulator) — 2026-11-15T09:13:26.411Z — session ms_564f3339adaf
 PASS · an immersive-ar session starts
 PASS · immersive-ar: a solo player who has changed nothing still gets a filled status panel and four labelled quick commands — Mission: not ready to fly | Open: It can do the science it is for | Wiring: 9 lines · all connected | Control: no control logic yet · quick: Add Neutron spectrometer | What holds us back? | Add power-saving logic | Fly the mission
 PASS · immersive-ar: the renderer keeps drawing frames for the session — {"renders":121,"updates":121,"presenting":true,"visibility":"visible"}
-PASS · immersive-ar: the session's frame has the workspace in it (not an empty frame) — {"width":1680,"height":980,"litShare":0.11459183673469388}
+PASS · immersive-ar: the session's frame has the workspace in it (not an empty frame) — {"width":1680,"height":980,"litShare":0.11375607385811468}
 PASS · an immersive-vr session starts
 PASS · immersive-vr: a solo player who has changed nothing still gets a filled status panel and four labelled quick commands — Mission: not ready to fly | Open: It can do the science it is for | Wiring: 9 lines · all connected | Control: no control logic yet · quick: Add Neutron spectrometer | What holds us back? | Add power-saving logic | Fly the mission
 PASS · immersive-vr: the renderer keeps drawing frames for the session — {"renders":120,"updates":120,"presenting":true,"visibility":"visible"}
-PASS · immersive-vr: the session's frame has the workspace in it (not an empty frame) — {"width":1680,"height":980,"litShare":0.11438289601554907}
-PASS · immersive-vr: frames keep coming after a part is added during the session — {"renders":89,"updates":89,"presenting":true,"visibility":"visible"}
+PASS · immersive-vr: the session's frame has the workspace in it (not an empty frame) — {"width":1680,"height":980,"litShare":0.11392857142857143}
+PASS · immersive-vr: frames keep coming after a part is added during the session — {"renders":90,"updates":90,"presenting":true,"visibility":"visible"}
 PASS · immersive-vr: frames keep coming in the systems view — {"renders":121,"updates":121,"presenting":true,"visibility":"visible"}
 PASS · immersive-vr: the systems view draws the real lines, and the panel names the part that is not connected — {"lines":9,"wiring":"9 lines · 1 part not connected","quick":"Connect Neutron spectrometer"}
-PASS · immersive-vr: picking a part up selects it — the panel says what it is missing, and the session keeps drawing — {"name":"Neutron spectrometer","id":"inst1","held":1,"activity":"Neutron spectrometer: No power line from the bus: it is switched off. No data line to storage: its measurements are not recorded. · no lines","frames":{"renders":48,"updates":48,"presenting":true,"visibility":"visible"}}
+PASS · immersive-vr: picking a part up selects it — the panel says what it is missing, and the session keeps drawing — {"name":"Neutron spectrometer","id":"inst1","held":1,"activity":"Neutron spectrometer: No power line from the bus: it is switched off. No data line to storage: its measurements are not recorded. · no lines","frames":{"renders":49,"updates":49,"presenting":true,"visibility":"visible"}}
 PASS · immersive-vr: Connect from the headset fits the three lines; the panel then reports the part as fully connected — {"activity":"Neutron spectrometer: fully connected, commandable by control logic · power 15 W, data 10000 bit/s, control","wiring":"12 lines · all connected","lines":12}
 PASS · immersive-vr: a question asked from the headset is answered on the player's AI panel (no panel before the first question) — 6 line(s): I could not interpret "What is holding this mission back right now? Give the / numbers, and the ways to deal with it with what each costs." with the
 PASS · immersive-vr: a sentence typed on the spatial keyboard reaches the player's AI and its answer comes up on the panel — typed "compute the link budget" · Compute the downlink budget. Eb/N0: 35.205 dB; Margin: 30.705 dB; / Closes: yes; Max data rate bit/s at 3 dB margin: 1178900000.

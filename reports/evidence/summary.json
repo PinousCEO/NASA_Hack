@@ -1,7 +1,7 @@
 {
-  "started": "2026-11-15 16:15:50 KST",
-  "finished": "2026-11-15 16:28:30 KST",
-  "head": "e8b1298",
+  "started": "2026-11-15 18:01:39 KST",
+  "finished": "2026-11-15 18:14:33 KST",
+  "head": "e16c413",
   "rows": [
     {
       "label": "Unit and integration tests",
@@ -9,15 +9,15 @@
       "passed": 159,
       "failed": 0,
       "ok": true,
-      "seconds": 10
+      "seconds": 8
     },
     {
       "label": "Browser end-to-end suite",
       "kind": "real browser, own fresh server, no language model, XR in the IWER emulator",
-      "passed": 51,
-      "failed": 0,
-      "ok": true,
-      "seconds": 192
+      "passed": 3,
+      "failed": 1,
+      "ok": false,
+      "seconds": 103
     },
     {
       "label": "Wiring loop in the UI",
@@ -62,17 +62,17 @@
     {
       "label": "Conversation: grows downward, a thread per part, nothing over the stage",
       "kind": "real browser, built-in analyser (no language model)",
-      "passed": 10,
+      "passed": 0,
       "failed": 0,
-      "ok": true,
-      "seconds": 28
+      "ok": false,
+      "seconds": 68
     },
     {
       "label": "One player, first screen to debrief, by clicking",
       "kind": "real browser, built-in analyser (no language model)",
-      "passed": 15,
-      "failed": 0,
-      "ok": true,
+      "passed": 14,
+      "failed": 1,
+      "ok": false,
       "seconds": 42
     },
     {
@@ -89,7 +89,7 @@
       "passed": 24,
       "failed": 0,
       "ok": true,
-      "seconds": 100
+      "seconds": 99
     },
     {
       "label": "Two players: pointing at a place, crew feed, game strip",
@@ -102,10 +102,10 @@
     {
       "label": "One person and three AI crewmates, to a flown mission",
       "kind": "real browser, no language model",
-      "passed": 9,
-      "failed": 0,
-      "ok": true,
-      "seconds": 84
+      "passed": 10,
+      "failed": 1,
+      "ok": false,
+      "seconds": 155
     },
     {
       "label": "Web ↔ MR loop",
@@ -113,7 +113,7 @@
       "passed": 13,
       "failed": 0,
       "ok": true,
-      "seconds": 28
+      "seconds": 27
     },
     {
       "label": "MR headset frame (what the session draws)",
@@ -121,7 +121,7 @@
       "passed": 19,
       "failed": 0,
       "ok": true,
-      "seconds": 53
+      "seconds": 52
     },
     {
       "label": "Play-through: CubeSat",
@@ -148,6 +148,6 @@
       "seconds": 1
     }
   ],
-  "total": 406,
-  "failed": 0
+  "total": 348,
+  "failed": 3
 }

@@ -111,7 +111,7 @@ export default function TitleScreen() {
     sfx("select");
     try {
       const created = await api("POST", "/api/sessions", { scenarioId: b.template, briefId: b.id, difficulty: level.id, name: String(b.title).slice(0, 60), visibility: "public", policy: "open", discipline: "systems" });
-      go(`/mission?s=${created.session.id}&new=1`);
+      go(`/mission?s=${created.session.id}&new=1&crew=ai`);
     } catch (err) {
       setLaunchError(err instanceof Error ? err.message : "Could not start the mission");
       setLaunching(null);
@@ -191,10 +191,10 @@ export default function TitleScreen() {
 
         <section id="missions" className="container section">
           <div className="reveal row between wrap" style={{ alignItems: "flex-end" }}>
-            <div><div className="eyebrow">Mission board</div><h2 style={{ marginBottom: 12 }}>New problems, every day</h2></div>
+            <div><div className="eyebrow">Mission board</div><h2 style={{ marginBottom: 12 }}>A new mission every day</h2></div>
             <div className="row wrap" style={{ marginBottom: 14 }}>
               {feed && <span className="chip">{feed.status.total} issued · {feed.status.today} today</span>}
-              {feed?.status.autonomous && <span className="chip ok" title="When a crew takes a mission, or fewer than four unplayed missions are left, the AI writes new ones by itself. This list refreshes every minute.">AI keeps writing missions · {feed.status.unplayed} waiting</span>}
+              {feed?.status.autonomous && <span className="chip ok" title="The AI writes one new mission a day. This list refreshes every minute.">One new mission a day, written by the AI</span>}
               {feed && <span className={`chip ${feed.status.source === "ai" ? "info" : ""}`}>{feed.status.source === "ai" ? `Written by ${feed.status.modelId}` : "Built-in problem set (no language model configured)"}</span>}
               <button className="btn sm" disabled={!account || issuing} title={account ? "Ask the mission office for three more briefs" : "Sign in to request new missions"} onClick={() => void issue()}>{issuing ? <><span className="spinner" /> Writing briefs…</> : "Generate new missions"}</button>
             </div>

@@ -1,4 +1,4 @@
-# Play-through: lunar-volatiles (seed 3) — 2026-11-15T07:28:28.785Z
+# Play-through: lunar-volatiles (seed 3) — 2026-11-15T09:14:32.045Z
 world: moon · Prospector Orbiter · bus 95 kg · limit 173 kg · budget $128M · 456 days · rover: yes · ground station 68.2 dBi
 problem: Lunar South Pole Volatiles Prospector — Find the water. An orbiter and a rover, one launch, one budget.
 kit: 4 controls (orbit.altitude, launch.vehicle, solar.area, antenna.dataRate), 6 parts, 4 roles

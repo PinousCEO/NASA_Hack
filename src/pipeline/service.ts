@@ -140,15 +140,39 @@ export class RequestService extends EventEmitter<RequestEvents> {
   }
 
   /**
+   * A sentence the platform can act on directly and answer at once (run the flight, read out a result): recorded as
+   * a finished request with its answer, so it sits in the player's conversation like any other.
+   */
+  submitAnswered(args: { text: string; user: User; topic?: string; answer: { verdict: "answer" | "explained" | "cannot"; text: string } }): RequestRecord {
+    const record: RequestRecord = {
+      id: newId("rq"),
+      text: args.text.trim(),
+      user: args.user,
+      trainingConsent: false,
+      status: "completed",
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      similarPastWork: [],
+      planIssues: [],
+      trace: [],
+      ...(args.topic ? { topic: args.topic } : {}),
+      answer: { verdict: args.answer.verdict, text: args.answer.text, wording: "template", facts: [] },
+    };
+    this.requests.set(record.id, record);
+    this.emit("updated", record);
+    return record;
+  }
+
+  /**
    * Start a request from operations that are already structured (a catalogue pick, an XR
    * tool, an API client). Natural-language analysis is skipped; everything after it —
    * planning, feasibility, execution, preview, approval — is identical.
    */
-  submitOperations(args: { summary: string; operations: Omit<Operation, "id">[]; user: User; trainingConsent?: boolean }): RequestRecord {
+  submitOperations(args: { summary: string; operations: Omit<Operation, "id">[]; user: User; trainingConsent?: boolean; said?: string; topic?: string }): RequestRecord {
     if (args.operations.length === 0) throw new Error("At least one operation is required");
     const record: RequestRecord = {
       id: newId("rq"),
-      text: args.summary,
+      text: args.said ?? args.summary,
       user: args.user,
       trainingConsent: args.trainingConsent ?? false,
       status: "analyzing",
@@ -158,8 +182,9 @@ export class RequestService extends EventEmitter<RequestEvents> {
       planIssues: [],
       trace: [],
     };
-    record.shared = true;
-    record.action = true;
+    // A button press is an action everyone sees; a sentence said to one's AI is a conversation, private until shared.
+    if (!args.said) { record.shared = true; record.action = true; }
+    else if (args.topic) record.topic = args.topic;
     this.structured.set(record.id, args.operations.map((op, i) => ({ ...op, id: `op${i + 1}` })));
     this.requests.set(record.id, record);
     this.start(record);

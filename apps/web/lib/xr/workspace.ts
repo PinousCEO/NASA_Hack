@@ -923,9 +923,35 @@ export async function createWorkspace(container: HTMLElement, callbacks: Workspa
       try { canvas.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
     }
   };
+  // Where this player's mouse is: over a place on the world (everyone sees their mark follow it) or over a part
+  // (everyone sees that part ringed in their colour). The mark goes two seconds after the mouse leaves.
+  let hoverAt = 0;
+  let hoverPart: string | null = null;
+  let pinnedUntil = 0;
+  const hover = (): void => {
+    const now = performance.now();
+    if (scene.mode === "orbit") {
+      const place = now < pinnedUntil ? null : scene.globePointFromRay(raycaster);
+      if (place) {
+        // Here: at once, every move. To the crew: ten times a second.
+        const who = callbacks.me?.() ?? { name: "You", color: "#4cc9f0" };
+        scene.setPing("self", place, who.color, who.name);
+        ownPoint = place;
+        ownPointAt = now;
+        if (pointClear) clearTimeout(pointClear);
+        pointClear = setTimeout(() => pointAt(null), 2200);
+        if (now - hoverAt > 95) { hoverAt = now; callbacks.collab()?.presence({ point: place }, true); }
+      }
+    } else if (scene.mode === "systems") {
+      if (now - hoverAt < 110) return;
+      hoverAt = now;
+      const id = scene.pick(raycaster)?.componentId ?? null;
+      if (id !== hoverPart) { hoverPart = id; callbacks.collab()?.presence({ focus: id ? `spacecraft.components.${id}` : null }, true); }
+    }
+  };
   const onMove = (e: PointerEvent): void => {
     if (!dragTurn) {
-      if (!inXr && e.buttons === 0) { aim(e); canvas.style.cursor = scene.planetHit(raycaster) ? "grab" : ""; }
+      if (!inXr && e.buttons === 0) { aim(e); canvas.style.cursor = scene.planetHit(raycaster) ? "grab" : ""; hover(); }
       return;
     }
     // A drag across a third of the view is one radian of turn.
@@ -969,7 +995,7 @@ export async function createWorkspace(container: HTMLElement, callbacks: Workspa
     if (inXr) return;
     aim(e as PointerEvent);
     const place = scene.globePointFromRay(raycaster);
-    if (place) pointAt(place, 15000);
+    if (place) { pinnedUntil = performance.now() + 15000; pointAt(place, 15000); }
   };
   canvas.addEventListener("dblclick", onDouble);
   canvas.addEventListener("pointerdown", onDown);

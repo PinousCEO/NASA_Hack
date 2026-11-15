@@ -1,0 +1,81 @@
+# Mission Forge — texts for the Space Apps project page
+
+Challenge 13 · Space Mission Design Game. Copy each block into the field of the same name.
+
+## High-Level Summary
+
+Mission Forge is a collaborative space-mission design game for the web and mixed reality. A crew of up to four chooses what a mission is for, builds the spacecraft, picks instruments, an orbit and a launch vehicle, stays inside mass, power, budget and schedule, and flies a simulated year in which things go wrong. Real space engineering is the balance of hundreds of values; instead of hiding that, we let players reach it in their own words. A player tells their AI what they want — a part, a method, an idea nobody listed — and the AI discusses it, explains the trade-offs and builds it onto the spacecraft in real time, while engineering models show what it costs. There is no single right answer: the game explains, and the crew decides. Crewmates see where each other points, each objective is credited to whoever solved it, and a new AI-written mission arrives every day on worlds drawn from NASA data. In mixed reality the mission floats above your open hand, so even a young student can take part by speaking and pointing instead of tuning numbers.
+
+## Project Demo
+
+(30-second video link)
+
+## Final Project
+
+https://github.com/PinousCEO/NASA_Hack
+
+## Project Details
+
+**What it is.** A game in which one to four players design, manage and fly a complete space mission, on the web and in mixed reality (Meta Quest 3, bare hands). It runs in a browser; the headset needs no app install.
+
+**How a mission is played.**
+1. Pick a mission from the board and a level (Cadet, Engineer, Chief). Every mission has its own place on Earth, the Moon or Mars, drawn from NASA imagery and elevation data.
+2. Say what your crew is going for. The goal you choose decides which science counts most.
+3. Build. Tell your AI what you want in your own words ("Add a camera that can see algae in the water"), or take parts from the shelf. A part works only once its power, data and control lines are connected.
+4. Trade. Ten live tiles show mass, power, budget, data, link and schedule; every change recalculates the models that depend on it and says in one line why a number moved.
+5. Choose an orbit and a launch vehicle. A design the vehicle cannot lift to that orbit cannot fly.
+6. Fly. A year is simulated day by day with seeded in-flight events (a solar storm, a ground-station outage, a failed battery cell). Four conditions with their evidence say whether it is a mission that works: it can do its science, no limit is broken, it can be launched, and it brings the data home.
+7. Change it and fly again, save and compare designs, or submit and see where your crew stands among the crews that took the same mission.
+
+**What is new in it.**
+- *Say it, and it is built.* The AI is not an adviser beside the game; it is how you build. It debates the idea, states what it would cost, and puts the part on the spacecraft while everyone watches. If the part is not in the catalogue, it designs one and assembles a 3D model for it.
+- *The player decides.* Hints and AI answers lay out the ways through a problem and what each costs. They never pick the answer. A test-only solver shows that every mission can be finished in several different ways.
+- *Mixed reality for access, not for show.* Open your left hand and the mission is on it. Turn the planet with your fingers, point at a place, speak. A child who cannot read a link budget can still hold the spacecraft and say an idea out loud.
+- *A crew you can see.* Wherever someone points — a finger in the headset, a mouse on the web — everyone sees a mark at the same place. A game chat records who asked for what and what was done. Roles answer for different priorities, a change that breaks a teammate's priority is said out loud, and each objective is credited to the crew member whose change solved it.
+- *A game that keeps growing.* A language model writes one new mission a day. What earlier crews found out is kept as a record and handed to the next crew's AI.
+- *Nobody plays alone.* Empty seats can be filled by AI crewmates that act through the same public interface as a person, so a solo student still meets the negotiation between roles.
+
+**Where it is going.** The board is not a fixed list. A language model writes a new mission every day, each with its own place, science question and limits, so there is always a problem nobody has solved yet. Every crew that plays leaves a record: what they asked for, what they built, what flew and what failed. Today that record is read by the next crew's AI. As more people play, it becomes a growing body of human mission-design decisions — the kind of data a future model for space engineering could learn from.
+
+**Why it matters.** Students rarely get to try a whole mission from idea to operation, and tools that show one topic at a time leave the trade-offs abstract. Here one decision visibly moves everything else, in language a beginner can use, and failure is explained instead of scored away.
+
+**How it was built.** TypeScript on Node.js for the server (authoritative state, HTTP and WebSocket), Next.js, React and Three.js for the client, the Immersive Web SDK for WebXR. Engineering models for orbit, eclipse, power, link budget and data are deterministic and tested against reference values; cost, schedule and launch-vehicle figures are game models and are labelled as such. Whatever a language model writes is treated as data: it is schema-checked, built in a test copy, tested, and published only after it passes. 159 automated tests and 51 browser checks cover the game; mixed reality was tried on a real Quest 3 and in the WebXR emulator.
+
+**Limits.** All missions are orbiters with an optional rover. The flight is simulated and shown as a result, not played through. Several hand gestures and the headset microphone have been tried only briefly on the real device. The interface is in English.
+
+## Use of Artificial Intelligence
+
+- **Inside the game.** A language model (OpenAI API) reads players' requests, plans changes, writes onboard control rules and the shape programs that are compiled into 3D parts, writes one new mission brief a day, and words the answers. Numbers in an answer come from the engineering models, not from the language model, and are labelled so. Speech in the headset is transcribed by an OpenAI transcription model. A model's opinion is never presented as scientific validation.
+- **AI crewmates.** Empty seats can be filled by rule-driven software players that use the same public interface as a person. Their accounts are named "… · AI". The browser has a recording mode that draws crew names without that suffix. In the demo video, the seats other than the author's are played by these AI crewmates.
+- **In development.** Most of the code, tests and documentation were written with an AI coding assistant (Anthropic Claude, through Claude Code) under the author's direction and tested by the author. Commits made this way carry a Co-Authored-By line.
+- The narration in the demo video is an AI-generated voice (OpenAI text-to-speech), and the video says so on screen. No AI-generated images or video are used. Planet surfaces come from NASA data, sounds are synthesised in the browser, and 3D parts are assembled from primitives by a deterministic compiler.
+
+## Space Agency Data
+
+- NASA GIBS: Blue Marble shaded relief and bathymetry; VIIRS city lights 2012 — the Earth, day and night.
+- NASA Solar System Treks: LRO LROC Wide Angle Camera global mosaic; Viking MDIM 2.1 colour mosaic — the Moon and Mars.
+- NASA Planetary Data System, Geosciences Node: LRO LOLA gridded elevation (LDEM_4); MGS MOLA gridded elevation (MEGDR) — terrain of the Moon and Mars.
+- NASA/JPL Solar System Dynamics: approximate positions of the planets; JPL Horizons — where the Sun, Earth, Moon and Mars are at the mission's date.
+- NASA General Mission Analysis Tool (GMAT): export of the mission's orbit as a GMAT script and import of GMAT reports.
+- NASA Systems Engineering Handbook (SP-2016-6105 Rev 2) and NPR 7120.5: the life-cycle phases behind the game's stages.
+- NASA Small Spacecraft Systems Virtual Institute, "Design and Develop Science Missions" (Access to Space for All webinar series, 2025): the mission segments and the design sequence used by the mission guide.
+- NASA CubeSat Launch Initiative, "CubeSat 101": the 6U CubeSat scenario.
+- NASA GSFC Mission Design Lab: the discipline seats of the crew.
+
+## References
+
+- NASA GIBS — https://gibs.earthdata.nasa.gov
+- NASA Solar System Treks — https://trek.nasa.gov
+- NASA PDS Geosciences Node — https://pds-geosciences.wustl.edu
+- JPL Solar System Dynamics, approximate positions of the planets — https://ssd.jpl.nasa.gov/planets/approx_pos.html
+- JPL Horizons — https://ssd.jpl.nasa.gov/horizons/
+- NASA GMAT — https://software.nasa.gov/software/GSC-17177-1
+- NASA Systems Engineering Handbook — https://www.nasa.gov/reference/systems-engineering-handbook/
+- NASA Small Spacecraft Systems Virtual Institute — https://www.nasa.gov/smallsat-institute
+- NASA CubeSat Launch Initiative, CubeSat 101 — https://www.nasa.gov/kennedy/launch-services-program/cubesat-launch-initiative/
+- NASA GSFC Mission Design Lab — https://etd.gsfc.nasa.gov/capabilities/integrated-design-center/mission-design-lab/
+- Wessen, R. R., Borden, C., Ziemer, J., Kwok, J., "Space Mission Concept Development Using Concept Maturity Levels", Jet Propulsion Laboratory, California Institute of Technology, 2013
+- NASA CubeSat Launch Initiative, "CubeSat 101: Basic Concepts and Processes for First-Time CubeSat Developers", revision of October 2017
+- Levri, J., "Design and Develop Science Missions", NASA Access to Space for All, Systems Engineering Webinar Series, 26 March 2025
+- Software: Node.js, TypeScript, Next.js, React, Three.js, Immersive Web SDK and Immersive Web Emulation Runtime (Meta), Zod, Vitest, Playwright, QuickJS (WebAssembly), OpenAI API, Claude Code (Anthropic)
+- Fonts: Archivo, IBM Plex Sans, IBM Plex Mono (SIL Open Font License)

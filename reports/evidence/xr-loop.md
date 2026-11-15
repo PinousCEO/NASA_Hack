@@ -1,4 +1,4 @@
-# Web ↔ MR (IWER emulator) — 2026-11-15T07:26:48.937Z — session ms_4911216f9273
+# Web ↔ MR (IWER emulator) — 2026-11-15T09:12:55.933Z — session ms_b339a7a848c5
 PASS · the emulated headset is detected — {"webxr":true,"secureContext":true,"immersiveAr":true,"immersiveVr":true,"emulated":true,"reason":null}
 PASS · an immersive-ar session starts
 PASS · Web → MR: the part added on the web is an object in the headset's scene

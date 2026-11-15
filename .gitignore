@@ -38,3 +38,9 @@ reports/evidence/ui/85-*.png
 Data/*.pptx
 data/*.pptx
 docs/CHALLENGE_13_STATEMENT.txt
+
+# Raw recordings for the demo video (large; the finished video is linked from the README)
+Movie/
+movie/
+# A paper under its publisher's copyright, kept locally for the knowledge base only
+Data/CMLS.pdf

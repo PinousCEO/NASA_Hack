@@ -42,7 +42,7 @@ await page.waitForFunction(() => Boolean(window.__workspace?.scene.mission), nul
 await page.waitForTimeout(6000);
 await shot("30-first-screen-with-walkthrough.png");
 const first = await page.locator("body").innerText();
-check("a newcomer's first screen states the mission, what is not yet working, what can be changed and how to ask", /THE PROBLEM/i.test(first) && /Does the mission work/i.test(first) && /Controls/i.test(first) && /My AI/i.test(first));
+check("a newcomer's first screen states the mission, what is not yet working, what can be changed and how to ask", /THE PROBLEM/i.test(first) && /Does the mission work/i.test(first) && /Controls/i.test(first) && (await page.locator(".saybar input").count()) === 1 && /Tell my AI/i.test(first), `talk bar: ${await page.locator(".saybar input").getAttribute("placeholder").catch(() => "none")}`);
 const walkthrough = await page.locator(".tutorial, .coachmark, [class*=tutorial]").first().innerText().catch(() => "");
 check("a short walkthrough is offered on first visit", walkthrough.length > 20, walkthrough);
 for (let i = 0; i < 8; i++) { const b = page.getByRole("button", { name: /^(Next|Got it|Skip|Start)/ }).first(); if (await b.count()) { await b.click(); await page.waitForTimeout(250); } else break; }

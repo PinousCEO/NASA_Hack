@@ -1,4 +1,4 @@
-# Play-through: leo-cubesat (seed 9) — 2026-11-15T07:28:18.224Z
+# Play-through: leo-cubesat (seed 9) — 2026-11-15T09:14:22.095Z
 world: earth · Coastal Watch · bus 4.2 kg · limit 12.3 kg · budget $3.1M · 365 days · rover: no · ground station 35.5 dBi
 problem: Coastal Watch 6U CubeSat — A shoebox-sized satellite, a university budget, a real science product.
 kit: 4 controls (orbit.altitude, antenna.dutyCycle, battery.capacity, launch.vehicle), 5 parts, 4 roles

@@ -1,4 +1,4 @@
-# UI run: conversation threads and stage overlays — 2026-11-15T07:21:16.326Z — session ms_2bcf98ea05c4
+# UI run: conversation threads and stage overlays — 2026-11-15T09:30:24.202Z — session ms_b2f09f2d99e2
 PASS · the conversation grows downward: the newer question is below the older one — compute the link budget @290 | simulate battery over 10 orbits @589
 PASS · the composer is at the bottom, under the conversation, and the view follows the newest message — composer @851, stream ends @841
 PASS · selecting the battery opens the battery's own, empty thread — The mission2 Li-ion battery

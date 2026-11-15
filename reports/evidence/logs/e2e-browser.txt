@@ -1,53 +1,16 @@
 PASS  landing page renders with missions from the API
 PASS  landing page has a WebGL backdrop
 PASS  unauthenticated visitors are sent to sign-in
-PASS  destinations are shown with portraits rendered from NASA imagery
-PASS  a mission can be started ranked or as a sandbox
-PASS  mission workspace opens with an IWSDK world
-PASS  desktop fallback: XR reported unavailable with a reason  — WebXR is present but no headset is available. Connect a headset or open the mission in the Meta Quest Browser.
-PASS  the mission opens on the problem, with nothing in the way
-PASS  the crew can define its mission from the problem panel
-PASS  the mission definition reshapes the scored objectives (primary and stretch goal)
-PASS  the planet is textured from NASA imagery (not the procedural fallback)  — LROC WAC tiles through the platform proxy
-PASS  the 3D stage is actually drawing (lit pixels in a screenshot of the canvas)  — 8962 of 10000 sampled pixels lit
-PASS  spatial XR panels stay hidden on the desktop
-PASS  both participants see each other in the crew bar
-PASS  dragging the Moon turns it and moves the mission clock (a turn of the Moon is a month)  — clock moved 1.55 days
-PASS  the Sun's direction and the Moon's phase follow the clock  — lit fraction 100% → 97%
-PASS  the other participant's scene shows the same moment  — 0 s apart
-PASS  the clock deck shows what is true at that moment and what the models say
-PASS  the problem arrives with its kit: the crux, its controls and its parts  — 4 controls
-PASS  a parameter change by one participant reaches the other as authoritative state  — altitude 60 km, 7 models recalculated
-PASS  the other participant is told who changed what
-PASS  recalculated metric tiles animate
-PASS  a catalogue component is built by the pipeline and deployed to both participants
-PASS  a part added from the catalogue arrives unconnected and is flagged
-PASS  Connect fits its power, data and control lines for both participants
-PASS  the 3D systems view draws exactly the lines the design has
-PASS  the new component appears in the systems view as a flight-hardware model  — 5 meshes in the instrument model
-PASS  a text-to-3D request is previewed and waits for approval (model-judgment evidence is never auto-published)
-PASS  the generated, versioned GLB is loaded into the systems view  — 7 mesh(es) from the GLB
-PASS  the generated asset is synchronised to the other participant
-PASS  a natural-language request runs through the pipeline and shows its plan
-PASS  the player's AI answers in words, with what was measured behind it
-PASS  a J2-propagated trajectory overlay is published to the scene
-PASS  the mission simulation runs and reports KPIs
-PASS  the flight meets in-flight events and reports what each one cost  — 2 event(s) at Engineer difficulty
-PASS  development time is tracked as a resource
-PASS  a design can be saved and shared with other crews
-PASS  two designs are compared side by side  — 14 rows
-PASS  the evaluation dashboard opens
-PASS  XR capability detection finds the (emulated) headset  — {"detected":{"ar":true,"vr":true,"reason":null},"raw":{"device":"object","ctor":"se","vr":true,"ar":true}}
-PASS  an immersive-ar session starts through IWSDK
-PASS  other participants see the headset user as present in XR
-PASS  the emulated controller grabs a spatial slider (IWSDK grab system)  — 1 object(s) held
-PASS  releasing the slider commits an edit that becomes a new mission version
-PASS  in the headset, carrying the ring's handle around the planet turns time  — 1 object(s) held, clock moved 2.61 days
-PASS  time turned in the headset shows on the desktop participants' screens
-PASS  the XR edit is synchronised to the desktop participants  — altitude → 456 km (XR)
-PASS  spatial panels and sliders are shown in XR
-PASS  the XR session ends cleanly and the desktop HUD returns
-PASS  research records from this session are listed
-PASS  no uncaught page errors
+FAIL  e2e run completed  — page.waitForSelector: Timeout 90000ms exceeded.
 
-51/51 checks passed. Screenshots: C:\Users\dlfgu\AppData\Local\Temp\mission-e2e-shots
+3/4 checks passed. Screenshots: C:\Users\dlfgu\AppData\Local\Temp\mission-e2e-shots
+Knowledge base: 4 document(s), 357 passage(s)
+Capabilities: 26 usable of 28 registered
+  - code.generate_module: unavailable (No language-model credentials configured (set OPENAI_API_KEY or ANTHROPIC_API_KEY))
+  - gmat.run: unavailable (GMAT is not installed/configured: set GMAT_BIN to a GMAT console executable to enable gmat.run)
+Language model unavailable — using the rule-based analyser. No language-model credentials configured (set OPENAI_API_KEY or ANTHROPIC_API_KEY)
+Audit log: 0 entries, chain intact
+No accounts yet: the first account registered becomes the administrator.
+Mission briefs: {"total":6,"today":6,"source":"built_in","modelId":null}
+Mission platform: http://127.0.0.1:8899/   API: /api   WebSocket: /ws   MCP: /mcp?session=<id>
+

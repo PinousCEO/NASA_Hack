@@ -18,10 +18,11 @@ import type { MissionVersion, Presence } from "../api";
 import { CORE_ORIGIN } from "../api";
 import { bake, buildBus, buildComponent, buildRover, buildSpacecraft, type SpacecraftModel } from "./models";
 import { SiteModel, type SiteKind } from "./site";
+import { Companion } from "./companion";
 import { type BodyId, createFlowLine, createFlowTube, createLabel, createPlanet, createSun, disposeObject, onGlobe, type Planet, toView } from "./space";
 import { type Sky, skyAt, SPIN_PERIOD_S } from "./ephemeris";
 
-export type ViewMode = "orbit" | "systems";
+export type ViewMode = "orbit" | "systems" | "site";
 export const BODY_RADIUS_KM: Record<BodyId, number> = { earth: 6378.137, moon: 1737.4, mars: 3396.19 };
 const OBLIQUITY = (23.43928 * Math.PI) / 180;
 const ECLIPTIC_POLE = new THREE.Vector3(0, Math.cos(OBLIQUITY), Math.sin(OBLIQUITY));
@@ -37,6 +38,8 @@ export class MissionScene {
   readonly root = new THREE.Group();
   readonly orbitView = new THREE.Group();
   readonly systemsView = new THREE.Group();
+  /** The place the mission looks at, on its own: the ground under the spacecraft's instruments (see site.ts). */
+  readonly siteView = new THREE.Group();
   /** Component id → its object in the systems view (pickable / grabbable). */
   readonly componentObjects = new Map<string, THREE.Object3D>();
   /** Scene-node id → generated asset placed in the systems view (text-to-3D results). */
@@ -56,10 +59,12 @@ export class MissionScene {
   private site: SiteModel | null = null;
   private siteStamp = "";
   private readonly sight = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineBasicMaterial({ color: new THREE.Color(0.5, 2.4, 2.8), transparent: true, opacity: 0.9, depthWrite: false }));
-  private readonly leader = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineBasicMaterial({ color: 0xffb020, transparent: true, opacity: 0.45, depthWrite: false }));
+  private readonly leader = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(Array.from({ length: 8 }, () => new THREE.Vector3())), new THREE.LineBasicMaterial({ color: 0xffb020, transparent: true, opacity: 0.6, depthWrite: false }));
   private viewer: THREE.Camera | null = null;
   /** Is the place in the spacecraft's line of sight right now (as drawn)? */
   observing = false;
+  /** The AI crewmates, as probes in the scene: each flies to what it is working on, with its name over it. */
+  private crew = new Map<string, { probe: Companion; holder: THREE.Group; tag: THREE.Sprite; focus: string | null; point: number[] | null; spoke: number; slot: number }>();
   private known: Set<string> | null = null;
   private born = new Map<string, number>();
 
@@ -558,11 +563,14 @@ export class MissionScene {
     this.mode = mode;
     this.orbitView.visible = mode === "orbit";
     this.systemsView.visible = mode === "systems";
+    this.siteView.visible = mode === "site";
+    if (!this.siteView.parent) this.root.add(this.siteView);
   }
 
   /** Extent of the active view in its own units, so hosts can frame or scale it. */
   get extent(): number {
     if (this.mode === "systems") return 1.9;
+    if (this.mode === "site") return 1.15;
     return Math.max(1.4, ...this.orbitPath.map((p) => p.length())) * 1.15;
   }
 
@@ -683,64 +691,129 @@ export class MissionScene {
   }
 
   /** Remote participants, drawn in the mission frame: headsets as visors with hands, desktops as name tags. */
+  /**
+   * The AI crewmates in this mission and what each is doing right now: the part it is working on (or "bus"), a place
+   * it points at, and whether it has just said something. Each is drawn as a probe that goes there.
+   */
+  setCrewProbes(list: { id: string; name: string; color: string; focus: string | null; point: number[] | null; speaking: boolean }[]): void {
+    for (const [id, c] of this.crew) {
+      if (list.some((x) => x.id === id)) continue;
+      this.root.remove(c.holder);
+      c.probe.dispose();
+      disposeObject(c.tag);
+      this.crew.delete(id);
+    }
+    list.forEach((x, i) => {
+      let c = this.crew.get(x.id);
+      if (!c) {
+        const probe = new Companion();
+        const holder = new THREE.Group();
+        probe.group.scale.setScalar(5.2);
+        const tag = createLabel(x.name.toUpperCase(), { height: 0.13, color: x.color, sub: "AI crewmate" });
+        tag.position.y = 0.62;
+        holder.add(probe.group, tag);
+        holder.traverse((o) => { o.raycast = () => undefined; });
+        holder.position.set(Math.cos(i * 2.1) * 2.2, 1.4, Math.sin(i * 2.1) * 2.2);
+        this.root.add(holder);
+        c = { probe, holder, tag, focus: null, point: null, spoke: 0, slot: i };
+        this.crew.set(x.id, c);
+        this.labelsChecked = -1;
+      }
+      c.focus = x.focus;
+      c.point = x.point;
+      if (x.speaking) c.spoke = this.time;
+      c.slot = i;
+    });
+  }
+
+  /** Where each AI crewmate's probe is and what it is doing (for checks). */
+  crewProbes(): { id: string; state: string; at: number[]; focus: string | null }[] {
+    return [...this.crew].map(([id, c]) => ({ id, state: c.probe.state, at: c.holder.position.toArray().map((v) => Math.round(v * 100) / 100), focus: c.focus }));
+  }
+
   /** Mark (or, with null, unmark) the place someone points at: a ring, a beam and their name, in their colour. */
   setPing(key: string, point: number[] | null | undefined, color: string, name: string, note = "points here"): void {
     const old = this.pings.get(key);
-    const stamp = point ? `${point[0]!.toFixed(1)},${point[1]!.toFixed(1)},${color},${name}` : "";
-    if (old && old.userData.stamp === stamp && old.parent === this.planet?.globe) return;
+    // A mark is built once for whoever it belongs to; after that only where it is going changes, and it glides there.
+    const stamp = `${color},${name},${note}`;
+    if (!point || !this.planet) {
+      if (old) { old.parent?.remove(old); disposeObject(old); this.pings.delete(key); }
+      return;
+    }
+    const to = onGlobe(point[0]!, point[1]!);
+    if (old && old.userData.stamp === stamp && old.parent === this.planet.globe) {
+      (old.userData.to as THREE.Vector3).copy(to);
+      old.userData.point = [point[0], point[1]];
+      return;
+    }
     if (old) { old.parent?.remove(old); disposeObject(old); this.pings.delete(key); }
-    if (!point || !this.planet) return;
     const g = new THREE.Group();
     g.userData.stamp = stamp;
-    const up = onGlobe(point[0]!, point[1]!);
-    g.position.copy(up);
-    g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
-    const tint = new THREE.Color(color).multiplyScalar(2.2);
-    const ring = new THREE.Mesh(new THREE.RingGeometry(0.06, 0.082, 48).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: tint, transparent: true, opacity: 0.95, side: THREE.DoubleSide, depthWrite: false }));
+    g.userData.to = to.clone();
+    g.userData.point = [point[0], point[1]];
+    g.userData.born = this.time;
+    g.position.copy(to);
+    g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), to);
+    const tint = new THREE.Color(color);
+    const glow = (k: number): THREE.MeshBasicMaterial => new THREE.MeshBasicMaterial({ color: tint.clone().multiplyScalar(k), transparent: true, opacity: 0.95, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending });
+    // On the ground: a bright core, a ring, and a ripple that keeps leaving it.
+    const core = new THREE.Mesh(new THREE.CircleGeometry(0.018, 24).rotateX(-Math.PI / 2), glow(3));
+    core.position.y = 0.008;
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.046, 0.058, 56).rotateX(-Math.PI / 2), glow(2.4));
     ring.name = "ping-ring";
-    ring.position.y = 0.006;
-    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, 0.5, 8), new THREE.MeshBasicMaterial({ color: tint, transparent: true, opacity: 0.9, depthWrite: false }));
-    beam.position.y = 0.25;
-    const dot = new THREE.Mesh(new THREE.SphereGeometry(0.03, 16, 12), new THREE.MeshBasicMaterial({ color: tint }));
-    dot.position.y = 0.5;
-    const ns = point[0]! >= 0 ? "N" : "S";
-    const lon = ((point[1]! + 540) % 360) - 180;
-    const tag = createLabel(name.toUpperCase(), { height: key === "target" ? 0.11 : 0.17, color, sub: `${note} · ${Math.abs(point[0]!).toFixed(1)}°${ns} ${Math.abs(lon).toFixed(1)}°${lon >= 0 ? "E" : "W"}` });
-    tag.position.y = 0.68;
-    for (const o of [ring, beam, dot]) o.raycast = () => undefined;
-    g.add(ring, beam, dot, tag);
+    ring.position.y = 0.007;
+    const ripple = new THREE.Mesh(new THREE.RingGeometry(0.05, 0.056, 56).rotateX(-Math.PI / 2), glow(2));
+    ripple.name = "ping-ripple";
+    ripple.position.y = 0.006;
+    // Above it: a shaft of light that narrows upward, and a crystal turning at its head.
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.0015, 0.012, 0.36, 12, 1, true), glow(1.6));
+    shaft.position.y = 0.18;
+    (shaft.material as THREE.MeshBasicMaterial).opacity = 0.55;
+    const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.028, 0), new THREE.MeshBasicMaterial({ color: tint.clone().multiplyScalar(2.6) }));
+    gem.name = "ping-gem";
+    gem.position.y = 0.4;
+    gem.scale.set(1, 1.5, 1);
+    const halo = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.0028, 8, 40), glow(2));
+    halo.name = "ping-halo";
+    halo.position.y = 0.4;
+    const tag = createLabel(name.toUpperCase(), { height: key === "target" ? 0.11 : 0.1, color, sub: note });
+    tag.position.y = 0.56;
+    for (const o of [core, ring, ripple, shaft, gem, halo]) o.raycast = () => undefined;
+    g.add(core, ring, ripple, shaft, gem, halo, tag);
     this.planet.globe.add(g);
     this.pings.set(key, g);
     this.labelsChecked = -1;
   }
 
   /** Who is pointing where right now (for checks): "key: lat,lon,colour,name". */
-  pingsShown(): string[] { return [...this.pings].map(([k, g]) => k + ": " + String(g.userData.stamp)); }
+  pingsShown(): string[] { return [...this.pings].map(([k, g]) => `${k}: ${(g.userData.point as number[]).map((v) => v.toFixed(1)).join(",")},${String(g.userData.stamp)}`); }
 
   /**
    * Show the place this mission is about as a model beside the world, with what the spacecraft's camera can tell
    * apart there against what the problem needs. Null takes it away.
    */
-  setSite(spec: { kind: SiteKind; name: string; nowM: number | null; needM: number | null } | null): void {
+  setSite(spec: { kind: SiteKind; name: string; world?: string; nowM: number | null; needM: number | null } | null): void {
     const stamp = spec ? `${spec.kind}|${spec.name}|${this.body}` : "";
     if (stamp !== this.siteStamp) {
       this.siteStamp = stamp;
-      if (this.site) { this.orbitView.remove(this.site.group); this.site.dispose(); this.site = null; }
+      if (this.site) { this.siteView.remove(this.site.group); this.site.dispose(); this.site = null; }
       if (spec) {
-        this.site = new SiteModel(spec.kind, this.body ?? "moon", spec.name);
-        this.site.group.scale.setScalar(0.7);
-        this.site.group.position.set(1.9, -0.3, 0.6);
-        this.orbitView.add(this.site.group);
-        if (!this.sight.parent) { for (const l of [this.sight, this.leader]) { l.raycast = () => undefined; l.frustumCulled = false; this.orbitView.add(l); } }
+        this.site = new SiteModel(spec.kind, this.body ?? "moon", spec.name, spec.world ?? "the world");
+        this.site.group.scale.setScalar(1.25);
+        this.site.group.position.set(0, -0.2, 0);
+        if (!this.siteView.parent) { this.siteView.visible = this.mode === "site"; this.root.add(this.siteView); }
+        this.siteView.add(this.site.group);
+        if (!this.sight.parent) { this.sight.raycast = () => undefined; this.sight.frustumCulled = false; this.orbitView.add(this.sight); }
         this.labelsChecked = -1;
       }
     }
     this.site?.setDetail(spec?.nowM ?? null, spec?.needM ?? null);
-    this.sight.visible = this.leader.visible = Boolean(spec);
+    this.sight.visible = Boolean(spec);
+    if (!spec && this.mode === "site") this.setMode("orbit");
   }
 
   /** What the site model shows (for checks). */
-  siteShown(): { kind: string; observing: boolean } | null { return this.site ? { kind: this.site.kind, observing: this.observing } : null; }
+  siteShown(): { kind: string; observing: boolean; onStage: boolean } | null { return this.site ? { kind: this.site.kind, observing: this.observing, onStage: this.siteView.visible } : null; }
 
   /** Where on the world a ray lands: [latitude, east longitude] in degrees, or null if it misses. */
   globePointFromRay(raycaster: THREE.Raycaster): number[] | null {
@@ -765,11 +838,12 @@ export class MissionScene {
   setPresence(roster: Presence[], selfClientId: string | null): void {
     const seen = new Set<string>();
     const focus = new Map<string, string>();
+    const who = new Map<string, string>();
     for (const key of [...this.pings.keys()]) if (key !== "self" && key !== "target" && !roster.some((p) => p.clientId === key && p.clientId !== selfClientId)) this.setPing(key, null, "", "");
     for (const p of roster) {
       if (p.clientId !== selfClientId) this.setPing(p.clientId, p.point ?? null, p.color, p.displayName);
-      const component = p.focus?.match(/components\.([\w-]+)/)?.[1];
-      if (component) focus.set(component, p.color);
+      const component = p.focus === "spacecraft.bus" ? "bus" : p.focus?.match(/components\.([\w-]+)/)?.[1];
+      if (component) { focus.set(component, p.color); if (p.clientId !== selfClientId) who.set(component, p.displayName); }
       if (p.clientId === selfClientId) continue;
       seen.add(p.clientId);
       let avatar = this.avatars.get(p.clientId);
@@ -797,6 +871,32 @@ export class MissionScene {
       }
     }
     this.setFocus(focus);
+    this.setPointerTags(focus, who);
+  }
+
+  /** The parts that carry someone's name right now (for checks): "part: NAME|colour". */
+  pointerTagsShown(): string[] { return [...this.pointerTags].map(([id, t]) => `${id}: ${t.stamp}`); }
+
+  /** Over each part someone else is pointing at (or working on): their name, in their colour. */
+  private pointerTags = new Map<string, { tag: THREE.Sprite; stamp: string }>();
+  private setPointerTags(colors: Map<string, string>, names: Map<string, string>): void {
+    for (const [id, t] of this.pointerTags) {
+      const stamp = names.has(id) ? `${names.get(id)}|${colors.get(id)}` : "";
+      if (t.stamp === stamp && t.tag.parent) continue;
+      t.tag.parent?.remove(t.tag);
+      disposeObject(t.tag);
+      this.pointerTags.delete(id);
+    }
+    for (const [id, name] of names) {
+      if (this.pointerTags.has(id)) continue;
+      const holder = id === "bus" ? this.bus : this.componentObjects.get(id);
+      if (!holder) continue;
+      const tag = createLabel(`▼ ${name.toUpperCase()}`, { height: 0.12, color: colors.get(id) ?? "#4cc9f0" });
+      tag.position.y = id === "bus" ? 1.25 : 1.0;
+      tag.name = "pointer-tag";
+      holder.add(tag);
+      this.pointerTags.set(id, { tag, stamp: `${name}|${colors.get(id)}` });
+    }
   }
 
   private applyPose(avatar: THREE.Group, p: Presence): void {
@@ -1018,18 +1118,9 @@ export class MissionScene {
       this.shock.scale.setScalar(0.05 + ease(shockT) * 0.9);
       (this.shock.material as THREE.MeshBasicMaterial).opacity = (1 - shockT) * 0.9;
     }
-    if (this.site && this.orbitView.visible) {
-      // The model keeps to the viewer's right of the world, turned to face them, wherever they look from.
-      if (this.viewer) {
-        const right = a.set(1, 0, 0).applyQuaternion(this.viewer.getWorldQuaternion(q)).applyQuaternion(this.orbitView.getWorldQuaternion(q).invert());
-        const upv = b.set(0, 1, 0).applyQuaternion(this.viewer.getWorldQuaternion(q)).applyQuaternion(this.orbitView.getWorldQuaternion(q).invert());
-        // In front of the world's lower right, inside the part of the view the side panels leave free.
-        const toward = this.orbitView.worldToLocal(this.viewer.getWorldPosition(new THREE.Vector3())).normalize();
-        const want = c.copy(right).multiplyScalar(0.7).addScaledVector(upv, -0.62).addScaledVector(toward, 1.1);
-        this.site.group.position.lerp(want, 1 - Math.exp(-dt * 4));
-        const toViewer = a.copy(this.viewer.getWorldPosition(a)).sub(this.site.group.getWorldPosition(b)).applyQuaternion(this.orbitView.getWorldQuaternion(q).invert());
-        this.site.group.rotation.set(0.45, Math.atan2(toViewer.x, toViewer.z), 0, "YXZ");
-      }
+    if (this.site) {
+      // Is the place in the spacecraft's line of sight (as drawn)? Then the line to it shows in the orbit view and the
+      // scan line runs across the close-up.
       const mark = this.pings.get("target");
       let seen = false;
       if (mark) {
@@ -1041,21 +1132,58 @@ export class MissionScene {
         sp.setXYZ(1, place.x, place.y, place.z);
         sp.needsUpdate = true;
         (this.sight.material as THREE.LineBasicMaterial).opacity = 0.55 + 0.4 * Math.sin(this.time * 14);
-        const lp = this.leader.geometry.getAttribute("position") as THREE.BufferAttribute;
-        lp.setXYZ(0, place.x * 1.02, place.y * 1.02, place.z * 1.02);
-        lp.setXYZ(1, this.site.group.position.x, this.site.group.position.y + 0.1, this.site.group.position.z);
-        lp.needsUpdate = true;
       }
-      this.leader.visible = Boolean(mark);
       this.sight.visible = seen;
       this.observing = seen;
       this.site.setObserving(seen);
-      this.site.update(dt);
+      if (this.siteView.visible) { this.site.group.rotation.y += dt * 0.12; this.site.update(dt); }
+    }
+    // The AI crewmates' probes: at the part being worked on (with a beam on it), over the place being pointed at,
+    // or waiting in a slow circle around the spacecraft.
+    if (this.crew.size) {
+      const face = this.viewer ? this.viewer.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3(0, 2, 6);
+      for (const c of this.crew.values()) {
+        const target = new THREE.Vector3();
+        let beamTo: THREE.Vector3 | null = null;
+        const part = c.focus ? (c.focus === "bus" ? this.bus : this.componentObjects.get(c.focus)) : null;
+        const mark = c.point && this.planet ? this.planet.globe.localToWorld(onGlobe(c.point[0]!, c.point[1]!, 1.02)) : null;
+        if (this.mode === "systems") {
+          if (part) { target.copy(part.position).add(new THREE.Vector3(0.28, 0.85, 0.28)); beamTo = this.systemsView.localToWorld(part.position.clone()); }
+          else { const a2 = this.time * 0.25 + c.slot * 2.1; target.set(Math.cos(a2) * 2.3, 1.25 + 0.15 * Math.sin(this.time + c.slot), Math.sin(a2) * 2.3); }
+        } else if (mark) {
+          const local = this.root.worldToLocal(mark.clone());
+          target.copy(local).multiplyScalar(1.38);
+          beamTo = mark;
+        } else {
+          const a2 = this.time * 0.2 + c.slot * 2.1;
+          target.copy(this.craft.position).add(new THREE.Vector3(Math.cos(a2) * 0.55, 0.3 + 0.1 * c.slot, Math.sin(a2) * 0.55));
+        }
+        c.holder.position.lerp(target, 1 - Math.exp(-dt * 2.6));
+        c.holder.scale.setScalar(this.mode === "systems" ? 1 : 0.55);
+        const working = beamTo !== null;
+        const speaking = this.time - c.spoke < 4;
+        const state = working ? "building" : speaking ? "speaking" : "idle";
+        if (c.probe.state !== state) c.probe.setState(state);
+        c.probe.aim(beamTo);
+        c.probe.update(dt, face);
+      }
     }
     for (const ping of this.pings.values()) {
-      const k = (this.time * 0.9) % 1;
+      // Glide to where it is going (along the surface), then keep it alive: the ripple leaves, the crystal turns.
+      const to = ping.userData.to as THREE.Vector3;
+      if (ping.position.distanceToSquared(to) > 1e-9) {
+        ping.position.lerp(to, 1 - Math.exp(-dt * 18)).normalize();
+        ping.quaternion.setFromUnitVectors(b.set(0, 1, 0), ping.position);
+      }
+      const k = (this.time * 0.8 + (ping.userData.born as number)) % 1;
+      const ripple = ping.getObjectByName("ping-ripple") as THREE.Mesh | undefined;
+      if (ripple) { ripple.scale.setScalar(1 + k * 2.4); (ripple.material as THREE.MeshBasicMaterial).opacity = 0.9 * (1 - k); }
       const pr = ping.getObjectByName("ping-ring") as THREE.Mesh | undefined;
-      if (pr) { pr.scale.setScalar(0.7 + k * 1.6); (pr.material as THREE.MeshBasicMaterial).opacity = 1 - k * 0.85; }
+      if (pr) pr.scale.setScalar(1 + 0.08 * Math.sin(this.time * 5));
+      const gem = ping.getObjectByName("ping-gem");
+      if (gem) { gem.rotation.y = this.time * 2.2; gem.position.y = 0.4 + 0.02 * Math.sin(this.time * 3); }
+      const halo = ping.getObjectByName("ping-halo");
+      if (halo) { halo.rotation.x = Math.PI / 2 + 0.5 * Math.sin(this.time * 1.7); halo.rotation.z = this.time * 1.3; }
     }
     const ring = this.siteMarker?.getObjectByName("site-ring");
     if (ring) {

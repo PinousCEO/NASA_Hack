@@ -51,6 +51,7 @@ check("the other player is told who is pointing", told >= 1);
 await ben.page.waitForTimeout(600);
 await ben.page.screenshot({ path: path.join(out, "92-crewmate-points-at-a-place.png") });
 // The crew beside the stage: a message from one reaches the other, and a change one makes is listed with their name.
+for (const p of [ana, ben]) await p.page.locator(".crew-roles-head", { hasText: /^Log/ }).click();
 await ben.page.locator(".crew-say input").fill("Look at the mark, is that where the rover goes?");
 await ben.page.locator(".crew-say button").click();
 await ana.page.waitForFunction(() => /Look at the mark/.test(document.querySelector(".crew-list")?.textContent ?? ""), null, { timeout: 15000 }).catch(() => null);
@@ -68,6 +69,7 @@ await ben.page.screenshot({ path: path.join(out, "93-crew-feed.png") });
 // Roles: each answers for one thing; with two taken, the crew is scored on each one holding.
 await ana.post(`/api/sessions/${sid}/role`, { seat: "Payload" });
 await ben.post(`/api/sessions/${sid}/role`, { seat: "Power" });
+await ben.page.locator(".crew-roles-head", { hasText: /^Roles/ }).click();
 await ben.page.waitForFunction(() => document.querySelectorAll(".crew-role .holder:not(.free)").length === 2, null, { timeout: 15000 }).catch(() => null);
 const roleRows = await ben.page.locator(".crew-role").evaluateAll((rows) => rows.map((r) => `${r.innerText.replace(/\s+/g, " ")} [${r.getAttribute("title")}]`));
 check("the crew feed lists the mission's roles, what each answers for, and who took which", roleRows.length === 4 && roleRows.some((r) => /Power/.test(r) && /you/i.test(r) && /W margin/.test(r)) && roleRows.some((r) => /Payload/.test(r) && /ana/i.test(r) && /science/i.test(r)), roleRows.join(" | "));

@@ -1,4 +1,4 @@
-# Each mission's own place on screen — 2026-11-15T07:12:27.403Z — 6 missions on the board
+# Each mission's own place on screen — 2026-11-15T08:16:33.193Z — 6 missions on the board
 - Wildfire night watch (earth) · site: fire · spacecraft: Night Watch · place: Sierra Nevada, California
     ✗ Carry a fire-watching imager [not on board]
     ✗ Resolve new fire fronts [nothing measures this yet]

@@ -724,7 +724,7 @@ table.compare td.win { color: var(--green); font-weight: 600; }
 .quest-item.unmet { border-color: rgba(255, 93, 115, 0.55); color: #ff8a9a; }
 .quest-item:hover { background: rgba(255, 255, 255, 0.09); color: var(--text); }
 .quest-level { font: 600 10px var(--font-mono); letter-spacing: 0.12em; text-transform: uppercase; white-space: nowrap; color: #ffd166; }
-.quest-hint { pointer-events: auto; align-self: flex-end; width: min(100%, 330px); padding: 10px 12px; animation: questIn 0.35s ease-out; border-color: rgba(255, 209, 102, 0.6); }
+.quest-hint { pointer-events: auto; align-self: center; width: min(100%, 330px); padding: 10px 12px; animation: questIn 0.35s ease-out; border-color: rgba(255, 209, 102, 0.6); }
 .quest-hint p { margin: 6px 0 5px; font-size: 12px; line-height: 1.45; color: var(--text); }
 .quest-hint ul { margin: 0; padding-left: 16px; font-size: 11px; line-height: 1.5; color: var(--dim); }
 .quest-hint li + li { margin-top: 3px; }
@@ -808,3 +808,145 @@ table.compare td.win { color: var(--green); font-weight: 600; }
 .need.met .bar i { background: #3ddc97; }
 .need .how { color: var(--dim); font-size: 11px; margin-top: 2px; }
 .need .btn { margin-top: 5px; }
+
+/* What a crewmate just said, large over the stage. */
+.caption { position: absolute; left: 50%; bottom: 132px; transform: translateX(-50%); width: min(92%, 640px); padding: 10px 16px; background: rgba(4, 7, 14, 0.86); border: 1px solid var(--line-strong); border-left: 3px solid #c58bff; font-size: 15px; line-height: 1.4; color: #fff; pointer-events: none; z-index: 4; animation: captionIn 0.3s ease-out; text-wrap: balance; }
+@keyframes captionIn { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translateX(-50%); } }
+.caption b { display: block; font: 600 11px var(--font-mono); letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 3px; }
+@container stage (max-width: 900px) or (max-height: 640px) { .caption { font-size: 13px; bottom: 150px; } }
+
+/* The strip never reaches under the buttons at the stage's edges. */
+.quest { width: min(100% - 16px, 760px); }
+.quest-bar { flex-wrap: nowrap; overflow: hidden; }
+
+/* The crew feed and the caption stay clear of the numbers along the bottom of the stage. */
+.crewfeed { top: 196px; max-height: calc(100% - 196px - 228px); }
+.crew-list { max-height: 96px; }
+.caption { bottom: 208px; }
+@container stage (max-width: 900px) or (max-height: 640px) { .crewfeed { max-height: calc(100% - 196px - 236px); } .caption { bottom: 216px; } }
+
+/* Play: the game's steps in order, each with its buttons and the sentence that does the same thing. */
+.play { display: flex; flex-direction: column; gap: 8px; }
+.play .step { border: 1px solid var(--line-strong); padding: 8px 9px; display: flex; flex-direction: column; gap: 6px; }
+.play .step.now { border-color: #ffd166; }
+.play .step.done { border-color: rgba(61, 220, 151, 0.55); }
+.play .step .head { display: flex; align-items: baseline; gap: 8px; }
+.play .step .head b { font: 700 13px var(--font-mono); color: #ffd166; width: 14px; }
+.play .step.done .head b { color: #3ddc97; }
+.play .step.done .head b::after { content: " ✓"; }
+.play .step .head span { font-weight: 600; font-size: 13px; color: var(--text); flex: 1; }
+.play .step .head i { font: 400 10px var(--font-mono); font-style: normal; color: var(--dim); white-space: nowrap; }
+.play .tool { display: flex; gap: 8px; align-items: flex-start; justify-content: space-between; font-size: 12px; }
+.play .tool .meta { font: 400 10.5px var(--font-mono); color: var(--dim); }
+.play .tool .why { font-size: 11px; color: var(--dim); line-height: 1.35; }
+.play .choices { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+.play .choices button { display: flex; flex-direction: column; gap: 2px; padding: 6px 5px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--line-strong); color: var(--text); font-size: 11.5px; cursor: pointer; text-align: left; }
+.play .choices button.on { border-color: var(--signal); background: rgba(255, 90, 31, 0.16); }
+.play .choices button small { font: 400 9.5px var(--font-mono); color: var(--dim); }
+.play .say { align-self: flex-start; background: none; border: 0; padding: 0; color: #c58bff; font-size: 11.5px; cursor: pointer; text-align: left; }
+.play .say:hover:not(:disabled) { text-decoration: underline; }
+.play .result { font-size: 12px; line-height: 1.4; padding: 6px 8px; border-left: 2px solid var(--line-strong); color: var(--text); }
+.play .result.success { border-left-color: #3ddc97; } .play .result.partial { border-left-color: #ffd166; } .play .result.failed, .play .result.not_ready { border-left-color: #ff5d73; }
+
+/* The switch that turns the game's sound off, on every page. */
+.sound-toggle { position: fixed; right: 10px; bottom: 6px; z-index: 40; background: rgba(4, 7, 14, 0.7); border: 1px solid var(--line-strong); color: var(--dim); font: 500 10px var(--font-mono); letter-spacing: 0.08em; padding: 2px 7px; cursor: pointer; }
+.sound-toggle:hover { color: var(--text); border-color: var(--signal); }
+
+/* The bar under the world: say what you want, and the answer comes back here. */
+.saybar { pointer-events: auto; display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+.saybar form { display: flex; gap: 6px; padding: 6px; border-color: #c58bff; }
+.saybar input { flex: 1; min-width: 0; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--line-strong); color: var(--text); font-size: 14px; padding: 9px 11px; }
+.saybar input:focus { outline: none; border-color: #c58bff; }
+.saybar .reply { background: rgba(4, 7, 14, 0.9); border: 1px solid var(--line-strong); border-left: 3px solid #c58bff; padding: 8px 11px; display: flex; flex-direction: column; gap: 5px; max-height: 150px; overflow-y: auto; }
+.saybar .reply .q { font-size: 11px; color: var(--dim); }
+.saybar .reply .q b, .saybar .reply .a b { font: 600 10px var(--font-mono); letter-spacing: 0.1em; text-transform: uppercase; margin-right: 6px; color: #c58bff; }
+.saybar .reply .a { background: none; border: 0; padding: 0; text-align: left; color: var(--text); font-size: 13px; line-height: 1.4; cursor: pointer; display: flex; gap: 6px; align-items: baseline; }
+.saybar .reply button.a { display: block; }
+.play details { border-top: 1px solid var(--line); padding-top: 5px; }
+.play details summary { cursor: pointer; font: 600 10.5px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); margin-bottom: 4px; }
+.play details .tool { margin: 6px 0; }
+.caption { bottom: 300px; }
+@container stage (max-width: 900px) or (max-height: 640px) { .caption { bottom: 300px; } .saybar input { font-size: 13px; padding: 7px 9px; } .saybar .reply { max-height: 96px; } .crewfeed { max-height: calc(100% - 196px - 300px); } }
+.crewfeed { max-height: calc(100% - 196px - 300px); }
+
+/* What a crewmate says sits under the strip at the top of the stage: the bar and its reply have the bottom. */
+.caption { top: 58px; bottom: auto; width: min(86%, 560px); }
+@container stage (max-width: 900px) or (max-height: 640px) { .caption { top: 54px; bottom: auto; } }
+
+/* The numbers along the bottom of the stage: one slim row of small chips, whatever the window size. */
+.hud .mid .stage-bottom .tiles { display: flex; flex-wrap: nowrap; gap: 3px; overflow: hidden; }
+.hud .mid .stage-bottom .metric { flex: 1 1 0; min-width: 0; padding: 3px 5px 4px; background: rgba(0, 0, 0, 0.62); }
+.hud .mid .stage-bottom .metric .k { font-size: 7.5px; letter-spacing: 0.04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hud .mid .stage-bottom .metric .v { font-size: 12.5px; margin-top: 0; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+.hud .mid .stage-bottom .metric .v .u { font-size: 8px; margin-left: 2px; }
+.stage-bottom { gap: 5px; }
+/* With the row slim, the crew feed has the room above it; the AI's reply never grows over the feed. */
+.crewfeed, .hud .mid .crewfeed { max-height: calc(100% - 196px - 190px); width: 236px; }
+.saybar { margin-left: 250px; }
+.saybar .reply { max-height: 118px; }
+@container stage (max-width: 760px) { .saybar { margin-left: 0; } .crewfeed, .hud .mid .crewfeed { max-height: calc(100% - 196px - 250px); } }
+
+/* An objective won: the check draws itself, the chip pops and flares, sparks fly, and a band of light crosses it. */
+.quest-item { position: relative; overflow: visible; }
+.quest-item .tick { width: 13px; height: 13px; vertical-align: -2px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.quest-item.just { animation: wonPop 0.9s cubic-bezier(0.2, 1.6, 0.4, 1) both, wonGlow 2.6s ease-out both; z-index: 2; }
+.quest-item.just .tick path { stroke-dasharray: 20; stroke-dashoffset: 20; animation: tickDraw 0.55s 0.25s ease-out forwards; }
+.quest-item.just::after { content: ""; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.75) 50%, transparent 80%); background-size: 250% 100%; animation: wonSweep 1.1s 0.3s ease-out both; pointer-events: none; mix-blend-mode: screen; }
+.quest-item .won { position: absolute; left: 50%; top: 50%; width: 0; height: 0; pointer-events: none; }
+.quest-item .won u { position: absolute; left: -1.5px; top: -1.5px; width: 3px; height: 11px; border-radius: 2px; background: #3ddc97; transform: rotate(var(--a)) translateY(-10px); animation: wonSpark 0.95s 0.15s cubic-bezier(0.1, 0.8, 0.3, 1) both; }
+.quest-item .won u:nth-child(odd) { background: #ffd166; height: 7px; }
+@keyframes wonPop { 0% { transform: scale(1); } 30% { transform: scale(1.32); } 100% { transform: scale(1); } }
+@keyframes wonGlow { 0% { box-shadow: 0 0 0 0 rgba(61, 220, 151, 0); background: rgba(61, 220, 151, 0.45); } 25% { box-shadow: 0 0 34px 8px rgba(61, 220, 151, 0.8); } 100% { box-shadow: 0 0 0 0 rgba(61, 220, 151, 0); background: rgba(255, 255, 255, 0.03); } }
+@keyframes tickDraw { to { stroke-dashoffset: 0; } }
+@keyframes wonSweep { from { background-position: 130% 0; opacity: 1; } to { background-position: -130% 0; opacity: 0; } }
+@keyframes wonSpark { 0% { opacity: 1; transform: rotate(var(--a)) translateY(-10px) scaleY(1); } 100% { opacity: 0; transform: rotate(var(--a)) translateY(-58px) scaleY(0.4); } }
+/* The banner's seal: a ring that draws round, a halo that leaves it, and the check drawn through it. */
+.quest-cheer .seal { width: 62px; height: 62px; margin: 0 auto 8px; display: block; fill: none; stroke: #ffd166; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 10px rgba(255, 209, 102, 0.8)); }
+.quest-cheer.big .seal { width: 96px; height: 96px; }
+.quest-cheer .seal circle { stroke-dasharray: 170; stroke-dashoffset: 170; animation: sealRing 0.7s ease-out forwards; transform-origin: 32px 32px; transform: rotate(-90deg); }
+.quest-cheer .seal .halo { stroke-dashoffset: 0; stroke-dasharray: none; opacity: 0; animation: sealHalo 1.1s 0.55s ease-out forwards; transform: none; }
+.quest-cheer .seal path { stroke: #fff; stroke-width: 4; stroke-dasharray: 44; stroke-dashoffset: 44; animation: tickDraw 0.5s 0.55s ease-out forwards; }
+@keyframes sealRing { to { stroke-dashoffset: 0; } }
+@keyframes sealHalo { 0% { opacity: 0.9; transform: scale(1); } 100% { opacity: 0; transform: scale(1.9); } }
+.quest-cheer .seal .halo { transform-origin: 32px 32px; }
+@media (prefers-reduced-motion: reduce) { .quest-item.just, .quest-item.just::after, .quest-item .won u { animation: none; } .quest-item.just .tick path, .quest-cheer .seal circle, .quest-cheer .seal path { stroke-dashoffset: 0; animation: none; } }
+
+/* On a narrower stage the numbers take two slim rows of five, so none is cut short. */
+@container stage (max-width: 1000px) { .hud .mid .stage-bottom .tiles { flex-wrap: wrap; } .hud .mid .stage-bottom .metric { flex: 1 1 18%; } .hud .mid .stage-bottom .metric .v { font-size: 12px; } .crewfeed, .hud .mid .crewfeed { max-height: calc(100% - 196px - 222px); } }
+
+/* The crew feed ends above the AI's reply. */
+@container stage (max-width: 1000px) { .crewfeed, .hud .mid .crewfeed { max-height: calc(100% - 196px - 290px); } }
+.crewfeed, .hud .mid .crewfeed { max-height: calc(100% - 196px - 258px); }
+
+/* Game chat: lines that come up at the bottom left of the stage, stay a few seconds and fade. No boxes, no bands. */
+.gamechat { position: absolute; left: 10px; bottom: 150px; width: min(46%, 430px); display: flex; flex-direction: column; justify-content: flex-end; gap: 3px; pointer-events: none; z-index: 3; }
+.gamechat .gline { font-size: 13px; line-height: 1.35; color: #fff; text-shadow: 0 1px 2px #000, 0 0 10px rgba(0, 0, 0, 0.95), 0 0 3px #000; animation: glineLife 11s linear forwards; }
+.gamechat .gline b { font: 600 11px var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; margin-right: 7px; }
+.gamechat .gline.did span { color: #d9f7e8; }
+.gamechat .gline.points span { color: #cfe4ff; }
+@keyframes glineLife { 0% { opacity: 0; transform: translateX(-14px); } 4% { opacity: 1; transform: none; } 82% { opacity: 1; } 100% { opacity: 0; transform: translateY(-6px); } }
+@container stage (max-width: 1000px) { .gamechat { bottom: 176px; width: min(60%, 400px); } .gamechat .gline { font-size: 12px; } }
+@media (prefers-reduced-motion: reduce) { .gamechat .gline { animation: glineFade 11s linear forwards; } }
+@keyframes glineFade { 0%, 85% { opacity: 1; } 100% { opacity: 0; } }
+
+/* No graphic carries a band down one side: every frame is the same on all four sides. */
+.saybar .reply { border: 1px solid var(--line-strong); }
+.play .result, .play .result.success, .play .result.partial, .play .result.failed, .play .result.not_ready { border: 1px solid var(--line-strong); }
+.play .result.success { border-color: rgba(61, 220, 151, 0.6); } .play .result.partial { border-color: rgba(255, 209, 102, 0.6); } .play .result.failed, .play .result.not_ready { border-color: rgba(255, 93, 115, 0.6); }
+.crew-role, .crew-role.ok, .crew-role.bad { border: 1px solid var(--line-strong); }
+.crew-role.ok { border-color: rgba(61, 220, 151, 0.5); } .crew-role.bad { border-color: rgba(255, 93, 115, 0.6); }
+/* The crew panel is small now: who is here, roles on demand, the log on demand, and the line to talk. */
+.crewfeed, .hud .mid .crewfeed { max-height: calc(100% - 196px - 330px); width: 226px; }
+
+/* Who solved what: a gold line in the game chat, a dot in the solver's colour on the objective, names with the result. */
+.gamechat .gline.won span { color: #ffd166; font-weight: 600; }
+.crew-line.won span { color: #ffd166; }
+.quest-item .by { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-left: 6px; flex: none; box-shadow: 0 0 6px currentColor; }
+.quest-cheer .credits { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 14px; margin-top: 8px; font: 600 12px var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; text-shadow: 0 1px 2px #000; }
+
+/* The game chat keeps to the column at the left of the stage (under the crew panel, beside the talk bar): it never
+   runs under the AI's reply. Each line: who, the role they hold, what was done. */
+.gamechat { left: 10px; width: 232px; bottom: 92px; max-height: 236px; overflow: hidden; }
+.gamechat .gline { font-size: 12.5px; }
+.gamechat .gline .seat { font: 500 9.5px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; font-style: normal; color: rgba(255, 255, 255, 0.62); margin-right: 7px; }
+@container stage (max-width: 760px) { .gamechat { width: min(60%, 400px); bottom: 176px; max-height: 120px; } }

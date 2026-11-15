@@ -1,5 +1,5 @@
-# UI run: one mission from first screen to debrief — 2026-11-15T07:21:48.725Z — session ms_4cfc674e2a11
-PASS · a newcomer's first screen states the mission, what is not yet working, what can be changed and how to ask
+# UI run: one mission from first screen to debrief — 2026-11-15T09:30:56.385Z — session ms_eb317a42195f
+PASS · a newcomer's first screen states the mission, what is not yet working, what can be changed and how to ask — talk bar: Tell your AI what to build or change, in your own words…
 PASS · a short walkthrough is offered on first visit — HOW TO PLAY · 1 / 7 SKIP THE PROBLEM On the left: the problem your crew was handed, whether the mission works yet — and exactly what is missing — and the kit that came with it: the controls that matter here and the parts worth reaching for. NEXT
 PASS · the crew defines its mission in the UI
 PASS · the Systems tab lists the two new parts as needing a connection

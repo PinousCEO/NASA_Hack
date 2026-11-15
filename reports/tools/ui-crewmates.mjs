@@ -35,25 +35,50 @@ const before = await snap();
 check("before anyone else has flown this kind of mission, the record of earlier crews is empty and says so", before.knowledge && Array.isArray(before.knowledge.lessons), `${before.knowledge?.records} records · ${before.knowledge?.lessons.length} about missions like this`);
 await page.locator(".crew-ai").click();
 await page.waitForFunction(() => document.querySelectorAll(".crew-people .who").length >= 4, null, { timeout: 30000 }).catch(() => null);
+await page.locator(".crew-roles-head", { hasText: /^Log/ }).click();
+// They work with the player: they say what they would change and wait to be told. Watch that for half a minute.
+await page.waitForTimeout(48000);
+const askedFirst = await page.locator(".crew-list").innerText();
+const untouched = (await snap()).mission.config.spacecraft.components.length;
+check("unless told otherwise they ask before changing the design: a proposal, and nothing changed until a yes", /Reply “yes” to apply/.test(askedFirst) && untouched === before.mission.config.spacecraft.components.length, `parts still ${untouched} · ${(askedFirst.match(/[^\n]*Proposal[^\n]*/) ?? [""])[0].slice(0, 260)}`);
+check("they do not greet or chat: what they write is what they propose and what they did", !/Hi, I'm|I'll take|how are/i.test(askedFirst.replace(/You[^\n]*/g, "")), askedFirst.replace(/\s+/g, " ").slice(0, 200));
+// Hand the mission over, to watch them work on their own.
+await page.locator(".crew-say input").fill("Crew, take over.");
+await page.locator(".crew-say button").click();
 const people = await page.locator(".crew-people .who").allInnerTexts();
 check("three AI crewmates join the crew, each labelled AI", people.length === 4 && people.filter((p) => /AI/i.test(p)).length === 3, people.join(" | "));
 // Speak to the crew while they work.
-await page.waitForTimeout(22000);
-await page.locator(".crew-say input").fill("Nova, how are we doing?");
+await page.waitForTimeout(16000);
+await page.locator(".crew-say input").fill("Hana, how are we doing?");
 await page.locator(".crew-say button").click();
 // Let them work until the mission has been flown (or two and a half minutes pass).
-const deadline = Date.now() + 150000;
+const deadline = Date.now() + 230000;
 let s = await snap();
-while (Date.now() < deadline && !["success", "partial", "failed"].includes(s.evaluation.outcome.verdict)) { await page.waitForTimeout(5000); s = await snap(); }
+// While they work, look at the stage: is each one there as a probe, does a probe go to the part being worked on,
+// is what they say shown large, and does the view follow them to the hardware?
+const watched = { probes: 0, working: 0, captions: new Set(), systems: 0, shot: false };
+while (Date.now() < deadline && !["success", "partial", "failed"].includes(s.evaluation.outcome.verdict)) {
+  for (let i = 0; i < 5; i++) {
+    await page.waitForTimeout(1000);
+    const seen = await page.evaluate(() => ({ probes: window.__workspace.scene.crewProbes().length, tags: window.__workspace.scene.pointerTagsShown(), lines: [...document.querySelectorAll(".gamechat .gline")].map((l) => l.textContent ?? ""), mode: window.__workspace.scene.mode }));
+    watched.probes = Math.max(watched.probes, seen.probes);
+    const busy = seen.tags.filter((t) => / · AI\|/.test(t));
+    if (busy.length) { watched.working++; if (seen.mode === "systems") watched.systems++; if (!watched.shot && seen.lines.length) { watched.shot = true; await page.screenshot({ path: path.join(out, "98-ai-crewmate-at-work.png") }); } }
+    for (const l of seen.lines) watched.captions.add(l.slice(0, 60));
+  }
+  s = await snap();
+  if (s.evaluation.outcome.verdict === "ready_to_fly" && !watched.flyAsked) { watched.flyAsked = true; await page.locator(".crew-say input").fill("Fly the mission."); await page.locator(".crew-say button").click(); }
+}
 await page.waitForTimeout(6000);
 s = await snap();
 const feed = await page.locator(".crew-list").innerText();
 const roles = (s.roles ?? []).filter((r) => r.holder);
 const ai = s.session.members.filter((m) => /· AI$/.test(m.displayName));
 check("each AI crewmate took one of the mission's roles", roles.filter((r) => ai.some((m) => m.accountId === r.holder)).length === 3, roles.map((r) => `${r.seat}: ${s.session.members.find((m) => m.accountId === r.holder)?.displayName} ${r.ok ? "✓" : "✗"}`).join(" · "));
-check("they said who they are and what they answer for", /AI crewmate/.test(feed) && /I'll take/.test(feed), feed.slice(0, 300));
-check("their changes to the design are listed under their names, like a player's", s.mission.version > before.mission.version && /(Nova|Orion|Vega)[^\n]*(Connect|Add|Launch vehicle|area|Orbit|data rate|Install)/i.test(feed), `v${before.mission.version} → v${s.mission.version} · parts ${before.mission.config.spacecraft.components.length} → ${s.mission.config.spacecraft.components.length} · lines ${before.mission.config.systems.links.length} → ${s.mission.config.systems.links.length}`);
-check("one of them pointed at the place the mission is about", /pointing at/.test(feed), (feed.match(/[^\n]*pointing at[^\n]*/) ?? [""])[0]);
+check("their changes to the design are listed under their names, like a player's", s.mission.version > before.mission.version && /(Hana|Leo|Jun)[^\n]*(Connected|Added|Launch vehicle|→|Installed)/i.test(feed), `v${before.mission.version} → v${s.mission.version} · parts ${before.mission.config.spacecraft.components.length} → ${s.mission.config.spacecraft.components.length} · lines ${before.mission.config.systems.links.length} → ${s.mission.config.systems.links.length}`);
+check("a crewmate at work is seen as its name on the part it is working on (no figures on the stage)", watched.probes === 0 && watched.working >= 3, `figures on the stage: ${watched.probes} · a part carried an AI crewmate's name in ${watched.working} of the looks`);
+check("what is proposed and done comes up as fading lines at the bottom left of the stage, and the view follows the work", watched.captions.size >= 4 && watched.systems >= 2, `${watched.captions.size} different lines seen · view on the hardware in ${watched.systems} of ${watched.working} looks`);
+check("one of them pointed at the place the mission is about", /pointing at/i.test(feed), (feed.match(/[^\n]*[Pp]ointing at[^\n]*/) ?? [""])[0]);
 check("spoken to by name, the crewmate answered with where its role stands", /Mina: /.test(feed), (feed.match(/[^\n]*Mina: [^\n]*/) ?? [""])[0]);
 check("the mission was flown, and the outcome was said to the crew", ["success", "partial", "failed"].includes(s.evaluation.outcome.verdict), `${s.evaluation.outcome.verdict} · ${s.evaluation.score.toFixed(0)} pts · ${s.evaluation.outcome.headline}`);
 await page.screenshot({ path: path.join(out, "96-ai-crewmates.png") });

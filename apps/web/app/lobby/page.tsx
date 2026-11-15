@@ -19,13 +19,31 @@ export default function Lobby() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [brief, setBrief] = useState<any>(null);
+  // Every mission on the board is offered here, not only the three engineering baselines they are built on.
+  const [board, setBoard] = useState<any[]>([]);
+  const [world, setWorld] = useState<"all" | "moon" | "mars" | "earth">("all");
+  const [launching, setLaunching] = useState<string | null>(null);
+  const [custom, setCustom] = useState(false);
+  const play = async (b: any, level: string): Promise<void> => {
+    setLaunching(`${b.id}:${level}`);
+    setError(null);
+    try {
+      const created = await api("POST", "/api/sessions", { scenarioId: b.template, briefId: b.id, difficulty: level, name: String(b.title).slice(0, 60), visibility: "public", policy: "open", discipline: "systems" });
+      navigate(`/mission?s=${created.session.id}&new=1&crew=ai`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start the mission");
+      setLaunching(null);
+    }
+  };
 
   useEffect(() => {
     const wanted = new URLSearchParams(window.location.search).get("scenario");
     if (wanted) setSelected(wanted);
     const briefId = new URLSearchParams(window.location.search).get("brief");
-    if (briefId) void api("GET", "/api/briefs").then((feed) => {
-      const found = feed.briefs.find((b: any) => b.id === briefId);
+    if (briefId || wanted) setCustom(true);
+    void api("GET", "/api/briefs").then((feed) => {
+      setBoard(feed.briefs);
+      const found = briefId ? feed.briefs.find((b: any) => b.id === briefId) : null;
       if (found) {
         setBrief(found);
         setSelected(found.template);
@@ -84,6 +102,35 @@ export default function Lobby() {
               <p className="faint" style={{ fontSize: 11, marginTop: 10 }}>Played on the engineering baseline selected below. The brief frames the problem; scoring comes from the engineering models.</p>
             </div>
           )}
+          {!brief && (
+            <section style={{ marginBottom: 26 }}>
+              <div className="row wrap" style={{ marginBottom: 14, gap: 8 }}>
+                {(["all", "moon", "mars", "earth"] as const).map((w) => (
+                  <button key={w} className={`btn sm ${world === w ? "" : "ghost"}`} onClick={() => setWorld(w)}>{w === "all" ? "All worlds" : w === "earth" ? "Earth orbit" : w[0]!.toUpperCase() + w.slice(1)} · {board.filter((b) => w === "all" || b.destination === w).length}</button>
+                ))}
+                <span className="faint" style={{ fontSize: 12, alignSelf: "center" }}>Every mission on the board. Pick one, pick a level, play.</span>
+              </div>
+              <div className="grid cols-3">
+                {board.filter((b) => world === "all" || b.destination === world).map((b) => (
+                  <div key={b.id} className="glass brief-card">
+                    <div className="row between"><span className={`dest ${b.destination}`}>{b.destination}</span><span className={`chip ${b.origin === "ai" ? "info" : ""}`}>{b.origin === "ai" ? "AI-written" : "Built-in"} · {b.day}</span></div>
+                    <h3><a href={`/lobby?brief=${b.id}`} title="Read the full brief and set up a crew">{b.title}</a></h3>
+                    <p className="dim">{b.problem}</p>
+                    {b.world && <div className="row wrap" style={{ gap: 6, marginTop: 8 }}>{b.world.target && <span className="chip" style={{ color: "#ffb020" }}>◎ {b.world.target.name}</span>}{b.world.craftName && <span className="chip">▲ {b.world.craftName}</span>}{b.world.needs?.detailM && <span className="chip" title="How fine a detail this problem needs to see">sees {b.world.needs.detailM} m</span>}</div>}
+                    <div className="levels" style={{ marginTop: "auto", paddingTop: 12 }}>
+                      {[["cadet", "★", "Cadet"], ["engineer", "★★", "Engineer"], ["chief", "★★★", "Chief"]].map(([id, stars, name]) => (
+                        <button key={id} className="level" disabled={launching !== null || !account} onClick={() => void play(b, id!)}>{launching === `${b.id}:${id}` ? <span className="spinner" /> : <span className="stars">{stars}</span>}<b>{name}</b></button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {board.length === 0 && <div className="glass card dim">The mission board is loading…</div>}
+              </div>
+              {error && <div className="chip bad" style={{ whiteSpace: "normal", marginTop: 12 }}>{error}</div>}
+              <button className="btn sm ghost" style={{ marginTop: 18 }} onClick={() => setCustom(!custom)}>{custom ? "▾" : "▸"} Set up a crew yourself: private missions, sandbox, lead review</button>
+            </section>
+          )}
+          {(custom || brief) && <>
           <div className="grid cols-3">
             {scenarios.map((s, i) => (
               <button key={s.id} className={`glass scenario-card fade-in ${selected === s.id ? "selected" : ""}`} style={{ animationDelay: `${i * 0.08}s`, color: "inherit" }} onClick={() => setSelected(s.id)}>
@@ -155,6 +202,7 @@ export default function Lobby() {
             </div>
           )}
 
+          </>}
           <section style={{ marginTop: 40 }}>
             <div className="eyebrow">Active missions</div>
             <div className="glass card" style={{ marginTop: 12 }}>
@@ -164,11 +212,11 @@ export default function Lobby() {
                   <tbody>
                     {sessions.map((s) => (
                       <tr key={s.id}>
-                        <td><b>{s.name}</b>{s.mode === "sandbox" && <span className="chip" style={{ marginLeft: 8 }}>sandbox</span>}<div className="dim">{s.briefTitle ?? s.scenarioTitle} · {s.difficulty}</div></td>
+                        <td><b>{s.name}</b>{s.mode === "sandbox" && <span className="chip" style={{ marginLeft: 8 }}>sandbox</span>}<div className="dim">{s.briefTitle ?? "Free design"} · {s.difficulty}</div></td>
                         <td><span className={`chip ${s.submitted ? "ok" : "info"}`}>{s.phase}</span></td>
                         <td className="mono">{s.members}/{s.maxMembers}</td>
                         <td className="mono">v{s.version}</td>
-                        <td style={{ textAlign: "right" }}><button className="btn sm" onClick={() => join(s)} disabled={!s.isMember && s.members >= s.maxMembers}>{s.isMember ? "Resume" : s.visibility === "invite" ? "Join with code" : "Join"}</button></td>
+                        <td style={{ textAlign: "right" }}><button className="btn sm" onClick={() => join(s)} title={!s.isMember && s.members >= s.maxMembers ? "A person who joins a full crew takes the seat of an AI crewmate. If every seat is a person's, the mission says it is full." : undefined}>{s.isMember ? "Resume" : s.visibility === "invite" ? "Join with code" : "Join"}</button></td>
                       </tr>
                     ))}
                   </tbody>

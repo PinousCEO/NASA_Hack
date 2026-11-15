@@ -33,6 +33,7 @@ await page.waitForFunction(() => Boolean(window.__workspace?.scene.mission), nul
 await page.waitForTimeout(5000);
 const requests = () => call("GET", `/api/sessions/${sid}/requests`).then((r) => r.body);
 const ask = async (text) => {
+  await page.locator(".right .tabs .tab", { hasText: /^AI/ }).click();
   await page.locator(".chat .composer textarea").fill(text);
   await page.getByRole("button", { name: "Send", exact: true }).click();
   const end = Date.now() + 200000;

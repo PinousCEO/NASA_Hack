@@ -55,7 +55,7 @@ export class SiteModel {
   private t = 0;
   private gridStamp = "";
 
-  constructor(kind: SiteKind, private readonly body: string, private readonly name: string) {
+  constructor(kind: SiteKind, private readonly body: string, private readonly name: string, world = "the world") {
     this.kind = kind;
     const geometry = new THREE.PlaneGeometry(1, 1, N, N).rotateX(-Math.PI / 2);
     geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array((N + 1) * (N + 1) * 3), 3));
@@ -72,7 +72,7 @@ export class SiteModel {
     this.group.add(plinth, frame, this.ground, this.grid, this.scan, this.extras);
     this.shape(0);
     this.dress();
-    this.tag = createLabel(name.toUpperCase(), { height: 0.11, color: "#ffb020", sub: `${CAPTION[kind]} · illustration of the site` });
+    this.tag = createLabel(`CLOSE-UP · ${name.toUpperCase()}`, { height: 0.12, color: "#ffb020", sub: `the ground on ${world} this mission looks at · ${CAPTION[kind]} (an illustration of this kind of place)` });
     this.tag.position.set(0, 0.56, -0.52);
     this.group.add(this.tag);
   }

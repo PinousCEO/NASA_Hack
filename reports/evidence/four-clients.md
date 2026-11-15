@@ -1,11 +1,11 @@
-# Four clients on one mission — 2026-11-15T07:21:07.656Z — http://127.0.0.1:8795
-session ms_fe9f145c532d
+# Four clients on one mission — 2026-11-15T09:05:25.188Z — http://127.0.0.1:8795
+session ms_869d644bc4db
 PASS · fcbravo joins
 PASS · fccharlie joins
 PASS · fcdelta joins
 PASS · a fifth player is refused (the crew is four) — 409 This mission is full (4 participants).
 PASS · all four connected and hold the same version — v1
-sync latency, edit sent → received by another client (n=72, loopback, includes recalculating the engineering models): median 5.2 ms · p95 7.6 ms · max 9.9 ms
+sync latency, edit sent → received by another client (n=72, loopback, includes recalculating the engineering models): median 4.5 ms · p95 8.0 ms · max 8.9 ms
 PASS · every edit reached every other client
 PASS · the four sockets hold identical mission state (config and derived results) — d11654185033666a d11654185033666a d11654185033666a d11654185033666a
 PASS · the four clients read identical state, checks, outcome and score over HTTP — 9d511068057130dd 9d511068057130dd 9d511068057130dd 9d511068057130dd

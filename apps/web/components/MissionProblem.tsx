@@ -83,17 +83,10 @@ const MOVES: Record<string, string> = {
  * the imagery must be and how much data must come home.
  */
 function MissionNeeds({ c, ask }: { c: Ctx; ask(text: string): void }) {
-  const [adding, setAdding] = useState<string | null>(null);
   const defs: any[] = (c.snap.scenario as any).objectives ?? [];
   const results = (c.snap.evaluation.objectives as any[]).filter((o) => o.category === "science" && !o.stretch);
   const catalog: any[] = c.snap.scenario.catalog;
-  const cadet = c.snap.session.difficulty === "cadet";
   const show = (v: number | null, unit: string): string => (v === null || v === undefined ? "–" : `${Math.abs(v) >= 100 ? v.toFixed(0) : Number(v.toPrecision(3))}${unit ? ` ${unit}` : ""}`);
-  const add = async (itemId: string): Promise<void> => {
-    setAdding(itemId);
-    try { await api("POST", `/api/sessions/${c.sid}/catalog`, { itemId }); c.reloadLists(); } catch (err) { c.toast((err as Error).message, "bad"); }
-    setAdding(null);
-  };
   if (!results.length) return null;
   return (
     <div className="needs">
@@ -104,7 +97,7 @@ function MissionNeeds({ c, ask }: { c: Ctx; ask(text: string): void }) {
         const done = r.achieved >= 1;
         const item = metric.type === "instrument" ? [...catalog].filter((i) => i.component.kind === metric.kind).sort((x, y) => x.component.costMusd - y.component.costMusd)[0] : null;
         const state = metric.type === "instrument" ? (done ? "on board" : "not on board") : r.value === null ? "nothing measures this yet" : `now ${show(r.value, r.unit)} · needs ${show(r.target, r.unit)}`;
-        const how = metric.type === "instrument" ? (item ? `Carry it: ${String(item.label).split(" · ")[0]} (${fmt(item.component.massKg)} kg, $${fmt(item.component.costMusd)}M${item.component.powerW ? `, ${item.component.powerW} W` : ""}).` : "No part in this mission's catalogue does this: ask your AI to build one.") : (MOVES[metric.field] ?? "");
+        const how = metric.type === "instrument" ? (item ? `Carry it: ${String(item.label).split(" · ")[0]} (${fmt(item.component.massKg)} kg, $${fmt(item.component.costMusd)}M${item.component.powerW ? `, ${item.component.powerW} W` : ""}).` : "No part in this mission's catalogue does this: ask your AI to build one.") + " Add it in Play, on the right." : (MOVES[metric.field] ?? "");
         return (
           <div key={r.id} className={`need ${done ? "met" : r.achieved > 0 ? "part" : "open"}`}>
             <div className="row between" style={{ gap: 6 }}>
@@ -113,7 +106,7 @@ function MissionNeeds({ c, ask }: { c: Ctx; ask(text: string): void }) {
             </div>
             {metric.type !== "instrument" && <div className="bar"><i style={{ width: `${Math.round(r.achieved * 100)}%` }} /></div>}
             {!done && <div className="how">{metric.type === "instrument" ? `Needs a ${String(metric.kind).replace(/_/g, " ")} on board. ` : def?.description ? `${def.description} ` : ""}{how}</div>}
-            {!done && cadet && item && !locked(c) && <button className="btn sm" disabled={adding !== null} onClick={() => void add(item.id)}>{adding === item.id ? <span className="spinner" /> : `Add ${String(item.label).split(" · ")[0]}`}</button>}
+
           </div>
         );
       })}

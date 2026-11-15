@@ -86,6 +86,8 @@ try {
   await lead.waitForURL("**/auth**");
   check("unauthenticated visitors are sent to sign-in", true);
   await signUp(lead, "ada");
+  // The New Mission page opens on the board; setting a mission up by hand is one click further.
+  await lead.getByRole("button", { name: /Set up a crew yourself/ }).click();
   await lead.waitForSelector(".scenario-card");
   await wait(600);
   check("destinations are shown with portraits rendered from NASA imagery", await lead.evaluate(() => [...document.querySelectorAll(".scenario-card .orb")].every((o) => /planets\/(moon|earth|mars)\.webp/.test(getComputedStyle(o).backgroundImage))));

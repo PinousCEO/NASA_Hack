@@ -1,200 +1,206 @@
-# Mission Forge
+<h1 align="center">Mission Forge</h1>
 
-2026 NASA Space Apps Challenge — **Space Mission Design Game (Challenge 13)** 용 협업 우주 미션 설계 플랫폼.
+<p align="center"><b>Space missions are hard. So we made one a game.</b><br>
+A collaborative space-mission design game for the web and mixed reality.<br>
+2026 NASA Space Apps Challenge · Challenge 13, <i>Space Mission Design Game</i></p>
 
-여러 명이 같은 미션을 Web과 WebXR(Meta Quest 브라우저)에서 동시에 설계하고, 자연어로 기능을 요청하면 AI가 계획·생성·검증·배포하며, 모든 변경은 실제 공학 모델로 재계산되어 전원에게 동기화됩니다.
+<p align="center"><img src="docs/img/mixed-reality-palm.jpg" alt="The mission floating above an open hand in mixed reality, with the web client on the monitor behind" width="88%"></p>
 
-> NASA와 무관한 독립 프로젝트입니다. 공학 모델은 가정이 명시된 1차 근사이고, 비용은 게임용 비용 모델입니다.
+<p align="center">
+<a href="#a-two-minute-tour">Tour</a> ·
+<a href="#how-it-answers-the-challenge">Challenge fit</a> ·
+<a href="#run-it">Run it</a> ·
+<a href="#use-of-artificial-intelligence">Use of AI</a> ·
+<a href="#nasa-data-and-resources">NASA data</a>
+</p>
 
-## 실행
+| Say it, and the AI builds it | A crew that can see each other | A new mission every day |
+|:---:|:---:|:---:|
+| <img src="docs/img/mixed-reality-build.jpg" alt="The player's AI building a part onto the spacecraft in mixed reality"> | <img src="docs/img/crew-at-work.jpg" alt="The web client: crew names on the parts they are working on, and the game chat"> | <img src="docs/img/board.jpg" alt="The mission board: missions on Earth, the Moon and Mars at three levels"> |
+
+A crew of up to four designs, manages and flies a complete space mission: they choose what the mission is for, build
+the spacecraft, pick instruments, an orbit and a launch vehicle, keep inside mass, power, budget and schedule, fly a
+simulated year with things going wrong, and read why it worked or did not.
+
+What makes it different:
+
+- **Say it, and it is built.** The main control is plain speech. A player tells their AI what they want — a part, a
+  method, an idea nobody listed — and the AI discusses it, explains what it costs, and builds it onto the spacecraft
+  while the crew watches. The engineering models then show the consequence in mass, power, data and money.
+- **No single right answer.** Nothing in the game picks the part for you. Hints lay out the ways through a problem
+  and what each costs; the crew decides. A test-only solver proves every mission can be finished in several
+  different ways.
+- **A mission on your open hand.** In mixed reality (Meta Quest 3, bare hands, no controllers) the mission floats
+  above your left palm. You turn the world with your fingers, point at a place on the planet, and speak. Close your
+  hand and you are back at your desk.
+- **A crew that can see each other.** Where one player points — a finger in the headset, a mouse on the web — shows
+  up for everyone at the same spot on the planet or on the same part. A game chat records who asked for what and
+  what was done, and each objective is credited to the crew member whose change solved it.
+- **A world of its own for every mission, and a new mission every day.** Each mission has its own place on Earth,
+  the Moon or Mars, drawn from NASA imagery and elevation data. A language model writes one new mission a day; what
+  earlier crews found out is handed to the next crew's AI.
+
+> This is an independent project and is not affiliated with or endorsed by NASA. The engineering models are
+> first-order approximations with their assumptions stated; cost, schedule and launch-vehicle figures are game
+> models, not estimates for any real programme.
+
+<p align="center"><img src="docs/img/mission-success.jpg" alt="Mission success on the web client" width="88%"></p>
+
+## Why speech and mixed reality
+
+We set out to build a simple game, and found that space engineering is not simple: a real mission is the balance of
+hundreds of values. Instead of hiding that, the game lets players reach it in their own words. We did not want
+players to tune battery figures until the numbers fit a prescribed answer; we wanted them to bring approaches we had
+not thought of. So you say what you are thinking, and the AI debates it with you and turns it into hardware you can
+see. Mixed reality is there for the same reason: with bare hands and a voice, a young student can hold a
+spacecraft, turn a planet and say an idea out loud.
+
+## A two-minute tour
+
+1. Open the board, pick a mission and a level (★ Cadet, ★★ Engineer, ★★★ Chief).
+2. Say what your crew is going for (the goal you choose decides which science counts most).
+3. Tell your AI what to build: *"Add a camera that can see algae in the water."* The part appears on the
+   spacecraft, already wired, and the tiles under the stage show what it cost.
+4. The rest of the crew takes its roles — power, communications, flight dynamics, payload. Empty seats can be filled
+   by AI crewmates, who do what a player in that role may do, through the same public API.
+5. Point at the target on the planet. Everyone sees your mark.
+6. Say *"Fly the mission."* A simulated flight runs day by day, with seeded in-flight events (a solar storm, a
+   ground-station outage, a failed battery cell). The result says which of the four conditions held and why.
+7. Change the design and fly again, save and compare designs, or submit and see where your crew stands among the
+   crews that took the same mission.
+
+## How it answers the challenge
+
+| The challenge asks for | Where it is in the game |
+|---|---|
+| Design, manage and simulate a complete mission | Goal → spacecraft → instruments → orbit → launch vehicle → day-by-day flight → debrief and report |
+| Individually or in teams of up to four | Four seats per mission; a fifth player is turned away. AI crewmates can fill empty seats for a solo player |
+| Different roles, decisions made together | Role seats (power, communications, flight dynamics, payload, …). Each role answers for one priority; the crew scores a point for every priority that still holds at the end, and a change that breaks someone's priority is said out loud |
+| Define an objective first | The crew writes what it is going for and picks a primary science goal (weighted ×1.5) and up to two stretch goals |
+| Spacecraft components | Structure, solar arrays, batteries, radios and antennas, flight computer, attitude control, seven kinds of instrument, a rover. A part does nothing until its power, data and control lines are connected |
+| Instruments with different characteristics | Mass, power, cost, data rate and science value per instrument; simple and advanced parts by level |
+| Orbit options and what they mean | Named orbits per world with a plain explanation, plus altitude, tilt and plane. Eclipse, range, coverage and detail on the ground are recalculated on every change |
+| Launch vehicles; mass and orbit compatibility | Three classes with capacity, price and lead time. Capacity drops for polar Earth orbits; a design the chosen vehicle cannot lift cannot fly |
+| Mass, power, budget, time | Ten live tiles under the stage, each with a one-line explanation of why it moved. Time is both mission lifetime and the development schedule to the launch window |
+| Every decision has a consequence | One change recalculates every model that depends on it, and the tiles that moved pulse |
+| Rarely a single perfect solution | The crew sets its own goals; `tests/playability.test.ts` shows that each scenario at each level can be finished, and that crews choosing differently end with different designs |
+| Feedback on why a mission succeeds or fails | Four conditions with their evidence come before the score: it can do its science, no limit is broken, it can be launched, it brings the data home |
+| Scoring | Stars and a score from science value, margins, efficiency, rigour and crew coordination |
+| Difficulty levels, scenarios | Three levels (hints come by themselves, on request, or not at all) and a board of missions on three worlds |
+| Random events | Seeded in-flight events during the simulated flight; crews on the same mission meet the same ones |
+| Dashboards, reports | Live dashboard, day-by-day flight record, evaluation dashboard and debrief |
+| Save, share and compare designs | Named versions, sharing between crews, side-by-side comparison, JSON export |
+| Competitive scenarios | A ranking per mission: crews that took the same mission are compared |
+| Accessible to different levels of knowledge | Speech as the main control, plain-language explanations on every number, a first-visit walkthrough, hints that explain instead of answering |
+
+## Run it
 
 ```bash
-npm install && npm run install:web   # 서버 + 웹 클라이언트 의존성
-npm run build:web                    # Next.js 정적 빌드 (apps/web/out)
+npm install && npm run install:web   # server and web client dependencies
+npm run build:web                    # static build of the web client (apps/web/out)
 npm run dev                          # http://127.0.0.1:8787
 ```
 
-Node 22 이상. 첫 번째로 가입한 계정이 플랫폼 관리자가 됩니다. 상태는 `.data/`에 저장됩니다. NASA에서 받은 영상 타일과 고도 데이터는 `.data/cache/`에 캐시됩니다(지워도 다시 받습니다).
+Node 22 or later. The first account to register becomes the platform administrator. State is kept in `.data/`.
 
-| 명령 | 내용 |
+A language model is optional. Copy `.env.example` to `.env` (which git ignores) and set `OPENAI_API_KEY` to enable
+the conversational builder, daily missions and voice transcription. Without a key the game still plays: the parts
+shelf, wiring, flight, scoring, collaboration and AI crewmates need no model, and a rule-based reader understands a
+small set of sentences such as "fly the mission".
+
+| Command | What it does |
 |---|---|
-| `npm test` | 단위·통합 테스트 159개 (JPL Horizons·NASA PDS·영상 타일 실연동, MCP 왕복, 4인 협업, TLS 포함) |
-| `npm run e2e` | 실제 브라우저(Edge/Chrome) E2E 51개 — XR 에뮬레이션 포함. 먼저 `build:web` 필요 |
-| `npm run typecheck` | 서버 + 웹 타입 검사 |
-| `npm run dev:web` | 프런트엔드 개발 서버(3000). `ALLOWED_ORIGINS=http://localhost:3000`, `NEXT_PUBLIC_CORE_ORIGIN=http://127.0.0.1:8787` 설정 |
-| `npm run mcp` | stdio MCP 서버 (읽기 전용 도구) |
+| `npm test` | 159 unit and integration tests |
+| `npm run e2e` | 51 browser checks in Edge/Chrome, including the WebXR emulator (run `build:web` first) |
+| `npm run typecheck` | Server and web type checks |
+| `node reports/tools/run-all-evidence.mjs` | Every check, on a fresh server without a language model; results in `reports/evidence/` |
 
-### 환경 변수 (`.env.example` 참고 — 비밀값은 git에서 제외되는 `.env` 또는 환경에서만 읽음)
+### Mixed reality
 
-- `OPENAI_API_KEY`, `OPENAI_MODEL` — 모델 기반 요청 분석·다중 도구 계획·코드 생성·text-to-3D. 기본 모델은 `gpt-5.5`이며 `OPENAI_MODEL`로 바꿉니다(예: `gpt-6-astra`).
-- `ANTHROPIC_API_KEY` — 대체 제공자. 두 키가 모두 있으면 `LLM_PROVIDER=openai|anthropic`으로 고정합니다.
-- 키가 없으면 규칙 기반 분석기로 동작하고, 모델이 꼭 필요한 요청은 "추가 자원 필요"로 분류됩니다.
-- `GMAT_BIN` — GMAT 콘솔 실행 파일 경로(`gmat.run` 활성화).
-- `PDFTOTEXT_BIN` — PDF 색인용. Windows에서는 Git for Windows에 들어 있는 `pdftotext.exe`를 자동으로 찾습니다.
-- `HOST`, `PORT`, `TLS_CERT_FILE`, `TLS_KEY_FILE` — LAN/HTTPS 제공.
-
-### XR 테스트 방법
-
-| 방법 | 여는 곳 | 확인할 수 있는 것 |
+| How | Where to open it | What it shows |
 |---|---|---|
-| **에뮬레이터** | PC 브라우저에서 미션 URL 뒤에 `&iwer=1` (예: `http://127.0.0.1:8787/mission?s=<id>&iwer=1`) → 상단의 **Enter MR** | 세션 진입, 공간 패널·슬라이더, 컨트롤러 그랩 로직. 소프트웨어 Quest 3(IWER)이므로 패스스루·손 추적·성능은 볼 수 없음 |
-| **Quest 실기 (USB)** | `adb reverse tcp:8787 tcp:8787` 후 헤드셋의 Meta Quest Browser에서 `http://localhost:8787` | 전부 |
-| **Quest 실기 (Wi-Fi)** | `HOST=0.0.0.0` + `TLS_CERT_FILE`/`TLS_KEY_FILE` 지정 후 `https://<PC IP>:8787` | 전부 (WebXR은 보안 컨텍스트가 필요해 HTTPS 필수) |
+| Emulator | Add `&iwer=1` to a mission URL in a desktop browser and press **Enter MR** | Session entry, spatial panels, grabbing. No passthrough or hand tracking |
+| Quest 3 over USB | `adb reverse tcp:8787 tcp:8787`, then `http://localhost:8787` in the headset's browser | Everything |
+| Quest 3 over Wi-Fi | `HOST=0.0.0.0` with `TLS_CERT_FILE` and `TLS_KEY_FILE`, then `https://<PC address>:8787` | Everything (WebXR needs HTTPS) |
 
-자동 검사는 `npm run e2e`가 에뮬레이터로 수행합니다.
+In the headset: open your left palm and the mission rises above it; make a fist and it is gone. Pinch the world to
+turn it, pinch with both hands to move and scale, touch the globe with a fingertip to point, and open your right
+palm for the tool panels.
 
-## 구성
+## How it is built
 
 ```
-apps/web/            Next.js 16 + React 19 + Three.js + IWSDK (정적 export, 서버가 같은 오리진으로 제공)
-  app/               랜딩 · 인증 · 로비 · 미션 작업공간 · 리더보드 · 연구 기록
-  lib/scene/         space(NASA 영상·고도 기반 행성, 하늘, 태양) · models(비행 하드웨어 모델)
-                     · MissionScene(궤도/시스템 뷰) · fx(블룸·필름 그레이드)
-  lib/xr/            IWSDK World, XR 능력 감지, 그랩, 공간 슬라이더·패널·키보드
-  components/        HUD 패널, 모션 프리미티브, 타임라인·궤적·착륙지 조사
+apps/web/        Next.js 16 + React 19 + Three.js + IWSDK (static export, served by the same server)
+  lib/scene/     planets from NASA imagery and elevation, spacecraft models, orbit / systems / target views
+  lib/xr/        the WebXR workspace: hands, gestures, spatial panels, voice
 src/
-  platform/          인증, 감사 로그, 시크릿, 세션 관리자(멤버·권한·편집·게임)
-  server/            HTTP API, WebSocket 협업 허브
-  pipeline/          요구사항 분석 → 계획 → 실현 가능성 → 실행 → 미리보기/승인
-  registry/ capabilities/ sandbox/ mcp/   Capability Registry, 28개 capability, QuickJS, MCP
-  llm/               OpenAI · Anthropic 제공자
-  science/ nasa/     궤도·전력·통신·로버 모델, J2 전파기, GMAT, 지형(DEM), 영상 타일, 수명주기/CML
-  game/              시나리오, 미션 생성, 일 단위 시뮬레이션, 채점
-  knowledge/ memory/ 지식 베이스(BM25, RAG 컨텍스트), 연구 기록
-tests/               vitest 8개 파일 + tests/e2e (Playwright)
+  server/        HTTP API and the WebSocket collaboration hub (the server holds the authoritative state)
+  platform/      accounts, sessions, roles, audit log, AI crewmates
+  pipeline/      a request in words → analysis → plan → build in a test copy → preview → approval → publish
+  science/ nasa/ orbit, power, link and rover models, a J2 propagator, terrain, imagery, GMAT script export
+  game/          scenarios, daily missions, the day-by-day flight, in-flight events, scoring
+  knowledge/     the record of what earlier crews found, retrieved for the next crew's AI
 ```
 
-## 무엇이 구현되어 있는가
+Clients send intent; the server validates it, recalculates the models and broadcasts a new version to everyone.
+Anything a language model writes is treated as data: it is schema-checked, built in a test copy, tested, and
+published only after it passes (and, where it changes the shared design beyond a player's rights, after the lead
+says yes). Generated control logic runs in a sandbox (QuickJS/WASM) with limits; no model output is executed
+directly in the shared mission.
 
-**그래픽** — 행성은 NASA 실측 데이터로 그립니다: 달은 LROC WAC 모자이크 + LOLA 고도, 화성은 Viking MDIM 2.1 + MOLA 고도, 지구는 Blue Marble + VIIRS 야간 조명(구름·대기는 절차적). 영상이 도착하기 전과 오프라인에서는 절차적 표면으로 대체됩니다. 우주선·부품은 설계 수치(어레이 면적, 안테나 지름, 구경, 배터리 용량, 버스 질량)로부터 만드는 PBR 모델(구겨진 MLI, 커버글라스 태양전지, 가공 알루미늄, 열제어 도료)이고, 데스크톱에서는 HDR 블룸과 필름 그레이드를 거칩니다. 소프트웨어 렌더러와 헤드셋에서는 가벼운 등급으로 자동 전환됩니다. 궤도 뷰의 우주선은 보이도록 확대되어 있으며 화면에 "not to scale"로 표시됩니다.
+## Use of artificial intelligence
 
-**WebXR 작업공간** — 하나의 IWSDK World가 데스크톱과 헤드셋을 모두 렌더링합니다. `immersive-ar`(패스스루 MR) 우선, 없으면 `immersive-vr`, 둘 다 없으면 데스크톱 모드와 그 이유를 표시합니다. XR에서는 가슴 높이의 "미션 테이블"에 궤도/시스템 뷰가 놓이고, 공간 슬라이더(고도·경사각·미션일)와 부품을 잡아 옮길 수 있으며, 상태 패널·명령 패널·공간 키보드가 제공됩니다.
+- **In the game.** A language model (OpenAI API; the model is set by `OPENAI_MODEL`) reads players' requests, plans
+  the change, writes onboard control rules and the shape programs that are compiled into 3D parts, writes one new
+  mission brief a day, and words the answers. The numbers in an answer always come from the engineering models, not
+  from the language model, and answers are labelled accordingly. Speech in the headset is transcribed with an OpenAI
+  transcription model. A model's judgement is never presented as scientific validation.
+- **AI crewmates.** Empty seats can be filled by AI crewmates. They are rule-driven software players (they do not
+  call a language model) that act through the same public API as a person, and their accounts are named "… · AI".
+  The browser has a recording mode (`?cast=1`) that draws crew names without that suffix; **in the demo video the
+  seats other than the author's are played by these AI crewmates.**
+- **In development.** Most of the code, tests and documentation in this repository were written with an AI coding
+  assistant (Anthropic Claude, through Claude Code) under the author's direction, and reviewed and tested by the
+  author. Commits made this way carry a `Co-Authored-By` line.
+- The narration of the demo video is an AI-generated voice (OpenAI text-to-speech), and the video says so on screen. No AI-generated images or video are used. Planet surfaces come from NASA data; sounds are synthesised in
+  the browser; 3D parts are assembled from primitives by a deterministic compiler.
 
-**실시간 멀티플레이** — 세션당 최대 4명(과제문의 팀 규모). 클라이언트는 *의도*(편집, 잠금, 프레즌스)만 보내고 서버가 권위 상태를 버전 단위로 방송합니다. 같은 필드를 동시에 고치면 뒤늦은 쪽이 현재 값과 함께 거절되고, 다른 필드는 자동 병합됩니다. 재접속 시 놓친 버전 목록을 받습니다.
+## NASA data and resources
 
-**자연어 런타임 빌더** — 상태 검사 → 분석(지식 베이스 검색 결과를 프롬프트에 포함) → capability 탐색 → 실현 가능성 → 계획 → 에셋/컴포넌트/스크립트 생성 → 격리 테스트 → 미리보기 → 승인 → 배포 → 동기화. 생성 코드는 QuickJS(WASM) 샌드박스에서만 실행됩니다. 모델이 만든 결과는 정책과 무관하게 승인이 필요합니다.
-
-**Text-to-3D** — 설명을 *형상 프로그램*(크기·자세·재질이 있는 프리미티브 목록, 최대 64개)으로 바꾸고, 이를 결정적으로 GLB로 컴파일해 장면에 배치합니다. 언어 모델이 있으면 모델이 형상 프로그램을 쓰고, 없으면 키워드 조합기가 흔한 우주선 부품(탱크, 엔진, 붐, 망원경, 접시 안테나, 태양전지, 라디에이터, 바퀴, 착륙 다리, 장비 박스)만 인식합니다. 신경망 메시 생성기가 아니라 프리미티브 조립이므로 결과는 공학 목업 수준입니다.
-
-**NASA 연동**
-
-| 항목 | 상태 |
+| Resource | Used for |
 |---|---|
-| JPL Horizons 상태 벡터 | 실연동 (테스트에서 실시간 호출) |
-| 지형 DEM — 달 LOLA LDEM_4, 화성 MOLA MEGDR | 실연동 (NASA PDS). 알려진 지형(올림푸스 산, 헬라스, 남극-에이트켄 분지, 전역 최고·최저점)으로 검증. 해상도 7.6 km(달)/14.8 km(화성)라 **광역 경사만** 제공하며 착륙선 규모 지형은 아님 |
-| 행성 영상 — NASA Solar System Treks, GIBS | 실연동. 허용 목록의 레이어·줌만 프록시하고 디스크에 캐시 |
-| 궤도·일식·전력·링크·로버 | 결정적 계산, 문헌 기준값으로 검증 |
-| J2 수치 전파 | 근사 (해석적 세차율과 3% 이내 일치). 고차 중력·제3체·항력 없음. 궤도 뷰에 오버레이 가능 |
-| GMAT 스크립트 생성 / 리포트 가져오기 | 구현. 가져온 궤적은 궤도 뷰에 오버레이로 그려짐. 생성 스크립트는 GMAT으로 실행해 검증하지 못함(미설치) |
-| GMAT 실행 (`gmat.run`) | `GMAT_BIN` 없으면 사용 불가로 표시 |
-| SE 수명주기, CML 1–9, 임무 세그먼트, MDL 분과 | 참조 데이터 + CML 1–5 규칙 기반 평가 (교육용, 공식 리뷰 아님) |
-| CubeSat 개념 | 6U 시나리오(12 kg 제한, 디스펜서 제약) |
+| NASA GIBS — Blue Marble shaded relief and bathymetry; VIIRS city lights 2012 | The Earth, day and night |
+| NASA Solar System Treks — LRO LROC WAC global mosaic; Viking MDIM 2.1 colour mosaic | The Moon and Mars |
+| NASA PDS Geosciences Node — LRO LOLA LDEM_4; MGS MOLA MEGDR | Elevation of the Moon and Mars (regional scale: about 7.6 km and 14.8 km per pixel) |
+| NASA/JPL Solar System Dynamics — approximate positions of the planets; JPL Horizons | Where the Sun, Earth, Moon and Mars are at the mission's date |
+| NASA General Mission Analysis Tool (GMAT) | Export of a mission's orbit as a GMAT script, import of GMAT report files (generated scripts have not been run in GMAT here) |
+| NASA Systems Engineering Handbook (SP-2016-6105 Rev 2); NPR 7120.5 | Life-cycle phases and reviews behind the game's stages |
+| NASA Small Spacecraft Systems Virtual Institute — *Design and Develop Science Missions* (Access to Space for All webinar, 2025) | The four mission segments and the six-step design sequence in the mission guide |
+| NASA CubeSat Launch Initiative — *CubeSat 101* | The 6U CubeSat scenario and its limits |
+| NASA GSFC Mission Design Lab (Integrated Design Center) | The discipline seats |
+| JPL — Wessen et al., *Space Mission Concept Development Using Concept Maturity Levels* | The concept-maturity gauge (a teaching aid, not a formal review) |
 
-**게임** — 시나리오 3개(달 남극 휘발성 물질 탐사 / 6U CubeSat / 화성 기상·중계), 시드 기반 미션 생성, 분과 좌석, 부품 카탈로그, 트레이드 스터디, 1일 단위 미션 시뮬레이션, 재생 가능한 미션 타임라인, CML 기반 단계 게이트, 결정적 채점과 피드백, 제출, 리더보드.
+Imagery and elevation credits: NASA/GSFC/Arizona State University (LROC), NASA/GSFC/MIT (LOLA), NASA/JPL/USGS
+(Viking MDIM 2.1), NASA/GSFC (MOLA), NASA Earth Observatory (Blue Marble, VIIRS).
 
-**연구 지식 플랫폼** — 미션 문제, 가설, 사용자 기여, 설계 변경, AI 평가, 도구 실행, 시뮬레이션, 결과가 출처·가정·검증 수준과 함께 기록됩니다. `/api/knowledge/context`가 인용 번호가 붙은 RAG 컨텍스트를 반환하고, 같은 검색이 모델 기반 요청 분석 프롬프트에 들어가며 사용된 출처가 요청 기록에 남습니다.
+## What has and has not been verified
 
-**보안·신뢰성** — scrypt 해시 비밀번호, 폐기 가능한 불투명 세션, HttpOnly 쿠키, 로그인 속도 제한, WebSocket 일회용 티켓, 서버 측 역할 검사, CSRF 오리진 검사, CSP, 해시 체인 감사 로그, 영속 제안·요청·버전, 시크릿은 환경에서만 읽고 응답·로그에서 제거(OpenAI 키 형식 포함).
+Checked on 2026-11-15; commands and full output are in `reports/evidence/`.
 
-## 미션 브리프와 AI 대기열
+- 159 unit and integration tests and 51 browser checks pass on a server without a language model.
+- With the real language model: a request in words adds a part and publishes it; a launch vehicle is chosen by
+  speech; the mission is flown by speech; a custom part with a generated 3D model is built; a full mission is played
+  from a first request to "Mission success" with three AI crewmates.
+- On a real Quest 3 with bare hands: entering mixed reality, the mission on the left palm, turning and scaling by
+  pinch, the tool panels.
+- **Not verified on the real headset:** several later hand gestures and visuals, and the headset microphone
+  (transcription was verified from a recorded clip). Other mixed-reality checks ran in the WebXR emulator, which has
+  no passthrough, hand tracking or device frame rate.
+- Latency figures are loopback values on one PC. GMAT scripts were not run in GMAT.
 
-- **미션 브리프**: 플레이할 문제는 고정 목록이 아니라 계속 발행되는 브리프입니다. 언어 모델이 설정되어 있으면 서버 시작 시와 3시간마다 그날의 브리프를 채우고(하루 최소 6개), 타이틀 화면의 **Generate new missions**로 더 요청할 수 있습니다. 모든 브리프는 연구 기록에 미션 문제(mission_problem)로 쌓입니다. 모델이 없으면 내장 문제 12종(템플릿당 4종)에서 발행합니다.
-- **한계**: 브리프는 문제 서술·과학 질문·예산/질량/기간 배율을 정하고, 검증된 엔지니어링 템플릿(달·CubeSat·화성) 위에서 플레이됩니다. 채점 목표와 부품 카탈로그는 템플릿의 것이며, 브리프 고유의 목표가 따로 채점되지는 않습니다. 브리프 내용은 모델 판단이며 사실 검증을 거치지 않습니다.
-- **AI 대기열**: 미션당 AI 요청은 도착 순서대로 한 번에 하나씩 실행됩니다. 작업공간에 항상 보이는 대기열에 누가 무엇을 요청했는지, 순번과 진행 상태가 팀 전원에게 실시간으로 표시되고, 팀원이 요청하면 알림이 뜹니다.
+Known limits: all missions are orbiters with an optional rover; the flight is simulated in daily steps and shown as
+a result, not played through; control logic runs once per simulated day; the interface is in English.
 
-## 달을 돌리면 시간이 돈다
+## License
 
-미션 화면의 시계는 팀 전체가 함께 보는 "지금"입니다.
-
-- **웹**: 행성을 마우스로 잡아 끌면 행성이 돌고, 그만큼 시계가 움직입니다(달 한 바퀴 = 한 달, 지구 한 바퀴 = 하루). 빈 공간을 끌면 카메라가 움직입니다.
-- **MR/VR**: 행성 적도의 링에 달린 손잡이를 잡고 행성 둘레로 옮기면 같은 일이 일어납니다.
-- 시계가 움직이면 태양 방향, 행성의 낮과 밤, 궤도 위 우주선 위치, 지구 방향이 그 시각의 실제 값으로 바뀝니다. 하단에 "햇빛 속 / 그림자 속", "지구 보임 / 가려짐", "착륙지 낮 / 밤", 달의 위상이 상태로 표시되고, 그 시각 기준으로 다시 계산한 전력·식·통신 여유가 함께 나옵니다.
-- **From Earth** 버튼은 카메라를 지구 방향에 세워, 그 시각에 지구에서 본 달의 모습(위상)을 보여 줍니다.
-- 시계는 세션의 모든 참가자에게 실시간으로 공유됩니다. 한 사람이 돌리면 웹·헤드셋 모두 같은 순간을 봅니다. 설계 데이터는 아니며 저장되지 않습니다.
-- 천체 위치: 태양은 서버 공학 모델과 같은 JPL 근사 요소, 달은 Astronomical Almanac 저정밀 급수(경도 약 0.3°), 자전은 IAU 평균 자전율. 표시용이며, 채점 수치는 항상 서버 모델에서 나옵니다. 달의 칭동과 화성의 자전축 방향은 반영하지 않았습니다.
-
-## 공식 과제문 대응 (Space Mission Design Game)
-
-과제문의 항목과 구현 위치입니다. "게임 모델"이라고 적은 것은 실제 수치가 아니라 플레이를 위해 정한 규칙이며, 화면과 API에서도 그렇게 표시합니다.
-
-| 과제문 | 구현 |
-|---|---|
-| 혼자 또는 최대 4인 팀 | 세션 정원 4석. 다섯 번째 참가는 거절됩니다. |
-| 미션 목표 정의 | 미션 시작 시 팀이 목적을 직접 쓰고, 주 과학 목표 하나(가중치 ×1.5)와 도전 목표 최대 2개(달성 시 가산점, 미달 시 −2점)를 고릅니다. 정의 전에는 단계 진행·제출이 막힙니다. (`POST /api/sessions/:id/define`) |
-| 우주선·탑재체 구성 | 전력(태양전지·배터리), 통신(안테나), 탑재체(7종 계측기), **자세 제어**, **탑재 컴퓨터**, 로버. |
-| 자세 제어 | 지향 안정도가 영상 해상도를 제한합니다(번짐 = 고도 × 안정도). 지향 오차는 접시 안테나의 지향 손실 12(오차/빔폭)² dB로 링크 예산에 들어갑니다. |
-| 탑재 컴퓨터 | 압축비만큼 같은 링크로 더 많은 과학 데이터를 내려보내고, 저장 용량을 더합니다. |
-| 궤도 선택 | 천체별 대표 궤도 프리셋 + 고도·경사각·승교점 슬라이더. 식 구간, 통신 거리, 커버리지가 다시 계산됩니다. |
-| 발사체 선택 | 세 등급(라이드셰어 / 전용 소형 / 대형). 탑재 능력·가격·발사 준비 기간이 다릅니다. 지구 궤도에서는 극궤도일수록 능력이 줄고, 달·화성에서는 궤도 경사가 발사 능력에 영향을 주지 않습니다. 발사체를 고르지 않으면 제출할 수 없습니다. 게임 모델. |
-| 자원 관리: 예산·질량·전력 | 예산, 발사 질량, 전력·배터리 여유가 모든 변경마다 다시 계산되고 제약 위반으로 표시됩니다. |
-| 자원 관리: 시간 | **개발 일정**: 버스 제작 + 가장 오래 걸리는 부품 + 나머지 부품 통합 시간 + 발사 준비가 발사 창까지의 기간 안에 들어와야 합니다. 게임 모델. |
-| 예기치 못한 사건 | 미션 시뮬레이션 중 **돌발 사건**(태양 폭풍 안전 모드, 지상국 장애, 태양전지 스트링 고장, 배터리 셀 고장, 안테나 급전부 열화). 시드로 뽑으므로 같은 문제를 푸는 팀은 같은 사건을 만납니다. 난이도에 따라 1~3건. 사건의 날짜와 크기는 게임 모델이며 고장 통계가 아닙니다. |
-| 협업 | 실시간 동기화, 분야별 좌석, 편집 잠금·충돌 처리, 팀 전체에 보이는 AI 대기열. |
-| 설계 저장·공유·비교 | 버전에 이름을 붙여 저장, 다른 팀과 공유, 두 설계를 나란히 비교(더 나은 값 강조, 부품 차이), 공유 설계 불러오기, JSON 내보내기. |
-| 같은 목표로 경쟁 | 브리프별 순위표. 제출하면 같은 브리프를 푼 팀 중 몇 위인지 알려 줍니다. 미션 보드에 도전한 팀 수와 최고 점수가 나옵니다. |
-| 샌드박스 | 미션 생성 시 선택. 모든 부품을 쓸 수 있고 예산·질량·기간·일정 한도를 바꿀 수 있습니다. 순위에는 오르지 않습니다. |
-| 교육적 가치 | 수치마다 쉬운 설명, "왜 숫자가 움직였는지" 한 줄, 첫 방문 안내, 제출 후 디브리프(어디서 왜 점수를 잃었는지). **미션 가이드**가 NASA의 과학 미션 설계 6단계(필요·목표 → 운용 개념 → 요구사항 → 설계 → 제작·검증 → 실행) 중 어디에 있는지와, 깨진 제약이 무엇을 뜻하는지, 벗어나는 방법들과 각각의 대가를 보여 줍니다. 가이드는 무엇을 고를지 정해 주지 않습니다. |
-| 정답이 하나가 아님 | 팀이 주 목표와 도전 목표를 스스로 정하고, 발사체·궤도·탑재체 조합이 여럿 성립합니다. `tests/playability.test.ts`가 테스트 전용 탐색기로 (1) 모든 시나리오·난이도가 제약을 지키며 끝까지 풀리고 (2) 서로 다른 선택을 한 팀이 서로 다른 설계로 모두 좋은 점수에 도달함을 확인합니다. 이 탐색기는 게임에는 들어 있지 않습니다. |
-| AI에게 질문 | 질문에는 계산 결과를 근거로 한 문장 답이 표시됩니다. 수치는 실행된 도구의 결과 그대로이고, 문장만 언어 모델이 씁니다(그렇게 표시). |
-| 진행 단계 | 개념 → 트레이드 → 설계 → 검토 → 제출. JPL 개념 성숙도(CML) 기준으로 단계가 열립니다. |
-| 현실감 있는 시각화 | NASA 영상·지형으로 그린 달·지구·화성, 실제 설계를 반영하는 우주선 모델. 목적지 그림은 같은 NASA 영상에서 렌더링한 이미지입니다(`apps/web/public/planets`). |
-
-**과제문과 아직 다른 점**
-- 화성 시나리오는 좋은 설계의 폭이 좁습니다(같은 조건의 다섯 가지 선택에서 서로 다른 설계가 2개; 달·지구 시나리오는 3개).
-- 화면 언어는 영어입니다.
-- 돌발 사건에 대한 대응은 "버틸 수 있는 설계를 만든다"까지입니다. 사건이 벌어진 뒤 운용 중에 조치를 고르는 단계는 없습니다.
-- 발사체·일정·비용은 게임 모델이며 실제 발사체나 실제 사업 일정의 수치가 아닙니다.
-- 브리프 본문은 언어 모델이 쓴 문제 설정입니다. 브리프마다 따로 채점 기준이 생기지는 않고, 채점은 템플릿의 공학 모델과 팀이 정의한 목표로 합니다.
-
-## 게임의 핵심 루프: 회선 · 제어 로직 · 개인 AI
-
-미션은 **이미 배선된 상태**로 시작한다. 그 뒤 승무원이 하는 일은 수치 조절만이 아니다.
-
-- **부품은 회선이 있어야 동작한다.** 카탈로그에서 추가한 부품은 미연결로 올라온다. 전력선(W)이 없으면 꺼져 있고, 데이터선(bit/s)이 없으면 측정값이 기록되지 않고, 제어선이 없으면 제어 로직이 명령하지 못한다. 포트 종류·방향이 맞지 않는 연결은 이유와 함께 거부되고, 정격이 모자란 선은 부품을 그만큼 제한한다. 하네스 질량은 질량 예산에 들어간다. (`src/systems/graph.ts`)
-- **AI가 제어 로직을 만든다.** "전력이 모자라면 관측을 줄였다가 회복되면 되돌려" 같은 문장에서 온보드 규칙(`WHEN 조건 → 대상에 값`), 기억 변수, 다운링크 우선순위가 만들어지고, 비행 시뮬레이션의 매일 실행되어 결과를 바꾼다. 규칙은 자체 파서로 해석하며 `eval`을 쓰지 않는다. 제안 전에 같은 조건으로 전후 비행을 비교한다. (`src/systems/controller.ts`, `src/systems/expr.ts`)
-- **각자의 AI.** 플레이어마다 대화 문맥이 따로 있고, 대화는 본인이 공유하기 전까지 비공개다. 공유 세계에 반영되는 변경은 모두가 본다. 아이디어에는 판정이 붙는다 — 만들어 측정함 / 조건부 / 성립하지 않음 / 모델 범위 밖. 성립하지 않은 아이디어는 이유와 함께 남아 공유할 수 있다.
-- **임무가 성립하는가가 먼저.** 과학 수행 가능 · 한도 위반 없음 · 발사 가능 · 비행에서 데이터 회수 — 네 조건과 근거가 점수보다 위에 나온다. 판정 기준은 게임 규칙으로 명시된다.
-- **Web과 MR은 같은 임무.** 헤드셋 상태 패널과 빠른 명령이 같은 설계 상태를 따른다(미연결 부품 연결, 비행 등). 헤드셋에서 한 질문의 답은 탁자 위의 "내 AI" 패널에 나온다. 세션이 시작될 때 탁자는 낮 쪽이 플레이어를 향하도록 한 번 돌려 놓인다.
-
-자율적으로 추가한 결정과 이유는 `docs/ADDED_DECISIONS.md`, 요구사항별 상태와 증거는 `requirements.json`과 `reports/`에 있다.
-
-## 검증 상태
-
-2026-11-15 기준. 명령과 결과 전문은 `reports/evidence/`에 있다.
-
-| 검증 | 명령 | 결과 |
-|---|---|---|
-| 단위·통합 테스트 (언어 모델은 테스트 더블) | `npm test` | 159개 통과 |
-| 브라우저 E2E (Edge, 새 서버, XR은 IWER 에뮬레이터) | `npm run e2e` | 51 / 51 |
-| 전체 재실행 (위 항목 모두) | `node reports/tools/run-all-evidence.mjs` | 요약: `reports/evidence/summary.md` |
-| 배선 UI 흐름 | `node reports/tools/ui-systems.mjs` | 9 / 9 |
-| 2인 UI + 개인 AI (실제 모델) | `node reports/tools/ui-crew.mjs` | 12 / 12 |
-| 1인 전체 흐름: 정의→제출 (실제 모델) | `node reports/tools/ui-fullflow.mjs` | 16 / 16 |
-| 4 클라이언트 동기화·지연 | `node reports/tools/fourclients.mjs` | 17 / 17 (지연 수치는 `reports/evidence/four-clients.md`) |
-| Web ↔ MR (에뮬레이터) | `node reports/tools/xr-loop.mjs` | 13 / 13 |
-| MR 헤드셋이 실제로 그리는 프레임·부품 집기·연결·내 AI (에뮬레이터) | `node reports/tools/xr-frame.mjs` | 16 / 16 |
-| 창 크기별 레이아웃 (1280×720 · 1366×768 · 1536×864 · 1920×1080) | `node reports/tools/ui-layout.mjs` | 24 / 24 |
-| 대화방: 아래로 쌓임·부품별 분리·겹침 없음 (모델 없이) | `node reports/tools/ui-chat.mjs --no-model` | 10 / 10 |
-| 2인 비공개 대화·공유·개인 시점 (모델 없이) | `node reports/tools/ui-private.mjs` | 9 / 9 |
-| 1인 전체 흐름: 첫 화면 → 제출·디브리프 (모델 없이) | `node reports/tools/ui-fullflow.mjs --no-model` | 15 / 15 |
-| 다른 조건 미션 플레이스루 | `node reports/tools/play-mission.mjs leo-cubesat` 등 | 큐브샛·화성 각 9 / 9 |
-| 실제 모델 대화 | `node reports/tools/live-ai.mjs <이름> -- "질문" …` | 제어기로 전력 부족일 155→0 등 |
-
-증거 스크립트 하나만 돌릴 때는 `node reports/tools/run-one.mjs reports/tools/<스크립트>.mjs`를 쓴다. 빈 데이터 폴더로 새 서버를 띄워 실행하고 끝나면 지운다. 이 서버는 **언어 모델 없이** 뜨므로 과금이 없다(`run-all-evidence.mjs`도 같다). 실제 모델을 쓰는 검사는 `--live`를 붙였을 때만 돌고 `.env`의 키로 요청이 발생한다. 실행 중인 서버(`npm run dev`)에 직접 돌리면 계정을 새로 만들기 때문에 로그인 시도 제한(429)에 걸릴 수 있다.
-
-**검증하지 못한 것**
-- **실물 헤드셋**: 이 프로젝트의 MR 검증은 모두 WebXR 에뮬레이터(IWER)에서 했다. 실제 추적, 패스스루, 손 추적, 기기 프레임률, 착용 편의성, 같은 방에서의 공간 정렬은 미확인이다.
-- **GMAT**: `gmat.run`은 실제 GMAT으로 실행해 보지 못했다. 리포트 가져오기는 GMAT ReportFile 형식의 자체 전파 결과로 테스트했다.
-- **실제 네트워크 지연**: 지연 수치는 같은 PC 루프백 값이다.
-- **최종 코드 + 실제 언어 모델의 전체 흐름**: 실제 모델을 쓰는 UI 검사 3종은 2026-11-15 01:01–01:32에 마지막으로 통과했다. 그 뒤의 변경(비용 수정, 화면 배치, MR)은 모델 없는 검사와 실제 모델 단건 4회로만 확인했다. 다시 확인하려면 `node reports/tools/run-all-evidence.mjs --live`.
-
-**알려진 한계**
-- 제어 로직은 하루 1회 실행되는 일 평균 모델이다. 한 궤도 안의 통신 창 단위 스케줄링은 안테나 가동률로 근사한다.
-- 배선은 버스 중심 별형 분배이며 전압·선로 손실을 계산하지 않는다. 로버 부품은 배선 대상이 아니다(연결된 것으로 취급).
-- 언어 모델 키가 없으면 "My AI"는 정해진 몇 가지 표현만 이해하는 규칙 기반 분석기로 동작하며 제어 로직을 만들지 못한다.
-- 지식 검색은 어휘 기반(BM25)이다. 궤도 뷰의 지구는 중심 천체일 때만 그려진다.
-- 비용·일정·발사체·임무 판정 기준은 게임 가정이며 NASA의 추정이 아니다.
-
-## 데이터 출처
-
-행성 영상·지형: NASA/GSFC/Arizona State University (LROC), NASA/GSFC/MIT (LOLA), NASA/JPL/USGS (Viking MDIM 2.1), NASA/GSFC (MOLA), NASA Earth Observatory (Blue Marble, VIIRS) — NASA Solar System Treks, NASA GIBS, PDS Geosciences Node 경유. 천체력: NASA/JPL Horizons.
+Apache License 2.0 — see [LICENSE](LICENSE). NASA imagery and data are in the public domain and are credited above.

@@ -411,6 +411,14 @@ export class MissionSession extends EventEmitter<SessionEvents> {
     if (this.meta.visibility === "invite" && inviteCode?.trim().toUpperCase() !== this.meta.inviteCode && account.role !== "admin") {
       throw new SessionError("This mission needs a valid invite code.", 403);
     }
+    if (this.meta.members.length >= MAX_MEMBERS && !/ · AI$/.test(account.displayName)) {
+      const ai = [...this.meta.members].reverse().find((m) => / · AI$/.test(m.displayName));
+      if (ai) {
+        this.meta.members = this.meta.members.filter((m) => m !== ai);
+        const claims = this.meta.game.roleClaims ?? {};
+        for (const [seat, who] of Object.entries(claims)) if (who === ai.accountId) delete claims[seat];
+      }
+    }
     if (this.meta.members.length >= MAX_MEMBERS) throw new SessionError(`This mission is full (${MAX_MEMBERS} participants).`, 409);
     const taken = new Set(this.meta.members.map((m) => m.discipline));
     const seat = discipline && this.scenario.disciplines.includes(discipline) ? discipline : (this.scenario.disciplines.find((d) => !taken.has(d)) ?? null);
@@ -564,7 +572,45 @@ export class MissionSession extends EventEmitter<SessionEvents> {
     const m = this.require(accountId, "viewer");
     if (this.meta.game.submitted) throw new SessionError("This mission has been submitted.", 409);
     this.deps.audit.record({ actor: accountId, action: "request.submit", sessionId: this.meta.id, detail: { text: text.slice(0, 500) } });
+    // Two things a player says in plain words are done at once by the platform itself, with no language model in
+    // between: flying the mission, and choosing a launch vehicle. Everything else goes to the player's AI.
+    const direct = this.sayDirect(accountId, m.role, text, topic);
+    if (direct) return direct;
     return this.requests.submit({ text, user: { id: accountId, role: m.role }, trainingConsent, ...(topic ? { topic } : {}) });
+  }
+
+  /** "Fly the mission" and "choose the launch vehicle", understood from the sentence itself (English or Korean). Null for anything else. */
+  private sayDirect(accountId: string, role: Role, text: string, topic?: string): RequestRecord | null {
+    const t = text.trim().toLowerCase();
+    if (t.length > 160 || /\?\s*$|^(what|why|how|should|can|could|would|is|are|do|does|when|which)\b|어떻게|왜|뭐|무엇|할까|인가/.test(t)) return null; // a question is for the AI
+    const user = { id: accountId, role };
+    const head = this.store.head();
+    const fly = /^(please\s+)?(fly|launch|run|start|simulate)\b[^.]{0,40}\b(mission|flight|simulation|it)\b|^(please\s+)?(fly|simulate)( it| now)?[.!]?$|비행\s*(해|시작|돌려|시켜)|시뮬레이션\s*(해|돌려|실행|시작)|미션\s*(을\s*)?(날려|발사|출발)/.test(t);
+    if (fly) {
+      if (role === "viewer") return this.requests.submitAnswered({ text, user, ...(topic ? { topic } : {}), answer: { verdict: "cannot", text: "A viewer cannot fly the mission. Ask the lead for an engineer's seat." } });
+      const sim = this.runSimulation(accountId);
+      const o = this.evaluate().outcome!;
+      const open = o.conditions.filter((k) => k.met === false).map((k) => `${k.title} (${k.evidence})`);
+      return this.requests.submitAnswered({ text, user, ...(topic ? { topic } : {}), answer: { verdict: "answer", text: `I flew the mission for ${sim.days} days. ${o.headline} ${sim.kpis.totalDataReturnedGb.toFixed(0)} Gb came home, ${sim.kpis.totalDataLostGb.toFixed(0)} Gb was lost, power ran negative on ${sim.kpis.daysPowerNegative} day(s)${sim.flightEvents.length ? `, and ${sim.flightEvents.length} thing(s) went wrong in flight` : ""}.${open.length ? ` Still open: ${open.join("; ")}.` : ""} The Analysis tab has the day-by-day record.` } });
+    }
+    const launch = head.derived["launch.vehicle"]?.value as { options?: { id: string; name: string; capacityKg: number; costMusd: number }[]; selectedId?: string | null } | undefined;
+    if (launch?.options?.length && /launch(er| vehicle)?|rocket|rideshare|발사체|로켓|라이드셰어/.test(t) && /\b(pick|choose|select|use|take|book|set|switch|go with|want)\b|cheapest|smallest|rideshare|dedicated|heavy|골라|선택|정해|바꿔|으로\s*해|로\s*해/.test(t)) {
+      if (role === "viewer") return this.requests.submitAnswered({ text, user, ...(topic ? { topic } : {}), answer: { verdict: "cannot", text: "A viewer cannot change the design. Ask the lead for an engineer's seat." } });
+      const mass = (head.derived["mass.budget"]?.value as { totalMassKg?: number } | undefined)?.totalMassKg ?? 0;
+      const named = launch.options.find((o) => t.includes(o.name.toLowerCase().split(" ")[0]!) || (/라이드셰어/.test(t) && /rideshare/i.test(o.name)) || (/전용/.test(t) && /dedicated/i.test(o.name)) || (/대형|헤비/.test(t) && /heavy/i.test(o.name)));
+      const fit = [...launch.options].sort((a, b) => a.costMusd - b.costMusd).find((o) => o.capacityKg >= mass);
+      const pick = named ?? fit;
+      if (!pick) return this.requests.submitAnswered({ text, user, ...(topic ? { topic } : {}), answer: { verdict: "cannot", text: `No launch vehicle on offer lifts ${mass.toFixed(1)} kg: the largest carries ${Math.max(...launch.options.map((o) => o.capacityKg)).toFixed(1)} kg. The spacecraft has to lose mass first.` } });
+      if (pick.id === launch.selectedId) return this.requests.submitAnswered({ text, user, ...(topic ? { topic } : {}), answer: { verdict: "explained", text: `The ${pick.name} is already chosen: it lifts ${pick.capacityKg.toFixed(1)} kg for $${pick.costMusd}M, and the spacecraft weighs ${mass.toFixed(1)} kg.` } });
+      return this.requests.submitOperations({
+        said: text,
+        ...(topic ? { topic } : {}),
+        summary: `Launch vehicle → ${pick.name}`,
+        user,
+        operations: [{ category: "engineering_design", intent: "set_config", description: `Choose the ${pick.name} (lifts ${pick.capacityKg.toFixed(1)} kg for $${pick.costMusd}M; the spacecraft weighs ${mass.toFixed(1)} kg${named ? "" : ": the cheapest that can carry it"})`, params: { patches: [{ op: "set", path: "meta.launchVehicleId", value: pick.id }], rationale: named ? "Chosen by name by the player" : "The cheapest launch vehicle whose capacity covers the spacecraft's mass" }, assumptions: [] }],
+      });
+    }
+    return null;
   }
 
   /** Add a catalogue component through the pipeline (asset generation, staging, tests, policy). */

@@ -226,6 +226,8 @@ export class CollabHub {
         const hands = msg.hands as { left?: unknown; right?: unknown } | undefined;
         if (hands && typeof hands === "object" && isPose(hands.left ?? null) && isPose(hands.right ?? null)) next.hands = { left: hands.left ?? null, right: hands.right ?? null };
         if (msg.focus === null || (typeof msg.focus === "string" && msg.focus.length <= 200)) next.focus = msg.focus;
+        // What an AI crewmate is doing, in a few words (shown beside its probe): players do not send this.
+        if (msg.doing === null || (typeof msg.doing === "string" && msg.doing.length <= 80)) next.doing = msg.doing;
         // A place on the world this crew member is pointing at: [latitude, east longitude] in degrees, or null.
         const point = msg.point;
         if (point === null || (Array.isArray(point) && point.length === 2 && point.every((n) => typeof n === "number" && Number.isFinite(n)) && Math.abs(point[0] as number) <= 90 && Math.abs(point[1] as number) <= 360)) next.point = point;

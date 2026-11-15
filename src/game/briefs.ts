@@ -369,20 +369,43 @@ ${missing.map((b) => `- id ${b.id} · template ${b.template} · "${b.title}": ${
     }
   }
 
+  /**
+   * One new mission a day: if nothing has been written today yet, write one. Called at start-up and once an hour;
+   * safe to call often and never throws. (The board is not topped up when crews take missions.)
+   */
+  /**
+   * A board that has never been filled starts with the built-in problems (they cost nothing to issue), so there is
+   * something to play on the first day. Does nothing once the board has six missions.
+   */
+  async seed(): Promise<void> {
+    this.pinStandingBriefs(new Date().toISOString().slice(0, 10));
+    if (this.briefs.length < 6) await this.generate(6 - this.briefs.length, true).catch(() => undefined);
+  }
+
+  async daily(): Promise<MissionBrief[]> {
+    const today = new Date().toISOString().slice(0, 10);
+    this.pinStandingBriefs(today);
+    await this.seed();
+    const ai = this.llm.status().available;
+    const written = this.briefs.some((b) => b.day === today && (ai ? b.origin === "ai" : !BUILT_IN_KITS[b.title]));
+    if (written) return [];
+    return this.generate(1).catch(() => [] as MissionBrief[]);
+  }
+
   /** Issue `count` new briefs: model-written when a model is configured, otherwise from the built-in pool. */
-  generate(count: number): Promise<MissionBrief[]> {
+  generate(count: number, builtInOnly = false): Promise<MissionBrief[]> {
     // One generation at a time: concurrent callers share the result instead of duplicating briefs.
-    this.generating ??= this.produce(Math.max(1, Math.min(6, Math.round(count)))).finally(() => {
+    this.generating ??= this.produce(Math.max(1, Math.min(6, Math.round(count))), builtInOnly).finally(() => {
       this.generating = null;
     });
     return this.generating;
   }
 
-  private async produce(count: number): Promise<MissionBrief[]> {
+  private async produce(count: number, builtInOnly = false): Promise<MissionBrief[]> {
     const now = new Date();
     const stamp = { createdAt: now.toISOString(), day: now.toISOString().slice(0, 10) };
     const made: MissionBrief[] = [];
-    if (process.env.BRIEF_AUTOGEN !== "off" && this.llm.status().available) {
+    if (!builtInOnly && process.env.BRIEF_AUTOGEN !== "off" && this.llm.status().available) {
       try {
         const templates = SCENARIOS.map((s) => `- ${s.id}: destination ${s.destination}. Default story: ${s.title} — ${s.tagline} Nominal budget $${s.baseConfig.meta?.budgetMusd}M, mass limit ${s.baseConfig.meta?.massLimitKg} kg, duration ${s.baseConfig.meta?.missionDurationDays} days. Catalogue (id: part): ${s.catalog.map((c) => `${c.id}: ${c.label}`).join("; ")}. Scored objectives (id: title): ${s.objectives.map((o) => `${o.id}: ${o.title}`).join("; ")}.`).join("\n");
         const issued = this.briefs.slice(-40).map((b) => b.title).join("; ") || "(none)";

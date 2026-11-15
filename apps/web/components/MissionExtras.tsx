@@ -155,9 +155,9 @@ export function Viewfinder({ snap, mode }: { snap: Snapshot; mode: string }) {
   return (
     <div className="viewfinder" aria-hidden>
       <span className="corner tl" /><span className="corner tr" /><span className="corner bl" /><span className="corner br" />
-      <div className="tag rec" style={{ right: 52, top: 14 }}>Live · authoritative state v{snap.mission.version}</div>
-      <div className="tag" style={{ left: 52, top: 44 }}>
-        <div>View <b>{mode === "orbit" ? `${body} orbit` : "spacecraft systems"}</b></div>
+      <div className="tag rec" style={{ left: 52, top: 122 }}>Live · authoritative state v{snap.mission.version}</div>
+      <div className="tag" style={{ left: 52, top: 62 }}>
+        <div>View <b>{mode === "orbit" ? `${body} orbit` : mode === "site" ? "the target, close up" : "spacecraft systems"}</b></div>
         <div>Alt <b>{fmt(el.periapsisAltitudeKm)} km</b> · Inc <b>{fmt(snap.mission.config.orbit.inclinationDeg)}°</b></div>
         <div>Period <b>{fmt(el.periodS / 60)} min</b></div>
       </div>

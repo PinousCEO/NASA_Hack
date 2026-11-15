@@ -10,6 +10,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Snapshot } from "@/lib/api";
+import { castOn } from "@/lib/cast";
 
 export const STAR_SCORES = [55, 75, 90] as const;
 export const starsFor = (score: number): number => STAR_SCORES.filter((s) => score >= s).length;
@@ -77,7 +78,7 @@ function chime(big: boolean): void {
   } catch { /* sound is decoration */ }
 }
 
-export function QuestBar({ snap, onAsk, goal = "none", onDefine }: { snap: Snapshot; onAsk(text: string): void; /** Has the crew said what it is going for? "none" when that does not apply (sandbox). */ goal?: "open" | "set" | "none"; onDefine?(): void }) {
+export function QuestBar({ snap, onAsk, goal = "none", onDefine, solved = {} }: { /** Who met each condition (by condition id): the crew member whose change took it from open to met. */ solved?: Record<string, { who: string; color: string }>; snap: Snapshot; onAsk(text: string): void; /** Has the crew said what it is going for? "none" when that does not apply (sandbox). */ goal?: "open" | "set" | "none"; onDefine?(): void }) {
   const s = snap as any;
   const level: string = s.session.difficulty;
   const outcome = s.evaluation.outcome;
@@ -90,7 +91,15 @@ export function QuestBar({ snap, onAsk, goal = "none", onDefine }: { snap: Snaps
   // A hint opens short (what stands in the way) and unfolds to the ways through it when asked: it must not cover the world.
   const [showHint, setShowHint] = useState(false);
   const [unfolded, setUnfolded] = useState(false);
-  const [cheer, setCheer] = useState<{ id: number; big: boolean; head: string; text: string } | null>(null);
+  const [cheer, setCheer] = useState<{ id: number; big: boolean; head: string; text: string; /** The condition just met: its solver's name is shown as soon as it is known. */ cond?: string; /** Show who solved what, with the result. */ crew?: boolean } | null>(null);
+  // Who solved what, counted per crew member: shown with the result, because a mission is won together.
+  const credits = useMemo(() => {
+    const tally = new Map<string, { who: string; color: string; n: number }>();
+    for (const c of Object.values(solved)) tally.set(c.who, { who: c.who, color: c.color, n: (tally.get(c.who)?.n ?? 0) + 1 });
+    return [...tally.values()];
+  }, [solved]);
+  // The objectives that have just been won: each plays its tick once.
+  const [fresh, setFresh] = useState<string[]>([]);
   const before = useRef<{ sid: string; met: string; stars: number; verdict: string } | null>(null);
   const hint = useMemo(() => (level === "chief" ? null : hintFor(snap, turn)), [snap, turn, level]);
 
@@ -100,12 +109,14 @@ export function QuestBar({ snap, onAsk, goal = "none", onDefine }: { snap: Snaps
     const verdict: string = outcome?.verdict ?? "";
     before.current = { sid: s.session.id, met: metKey, stars, verdict };
     if (!prev || prev.sid !== s.session.id) return;
-    let won: { big: boolean; head: string; text: string } | null = null;
-    if (verdict === "success" && prev.verdict !== "success") won = { big: true, head: "Mission success", text: `${"★".repeat(Math.max(1, stars))} · ${score.toFixed(0)} points` };
+    const justMet = conditions.filter((k, i) => metKey[i] === "1" && prev.met[i] === "0").map((k) => String(k.id));
+    if (justMet.length) { setFresh(justMet); setTimeout(() => setFresh((f) => f.filter((x) => !justMet.includes(x))), 2800); }
+    let won: { big: boolean; head: string; text: string; cond?: string; crew?: boolean } | null = null;
+    if (verdict === "success" && prev.verdict !== "success") won = { big: true, head: "Mission success", text: `${"★".repeat(Math.max(1, stars))} · ${score.toFixed(0)} points`, crew: true };
     else if (stars > prev.stars) won = { big: stars === 3, head: `${"★".repeat(stars)} earned`, text: `${score.toFixed(0)} points` };
     else {
       const i = [...metKey].findIndex((m, k) => m === "1" && prev.met[k] === "0");
-      if (i >= 0) won = { big: false, head: "Objective complete", text: conditions[i]!.title };
+      if (i >= 0) won = { big: false, head: "Objective complete", text: conditions[i]!.title, cond: String(conditions[i]!.id) };
     }
     if (!won) return;
     const id = Date.now();
@@ -121,7 +132,8 @@ export function QuestBar({ snap, onAsk, goal = "none", onDefine }: { snap: Snaps
   const unfoldedRef = useRef(false);
   unfoldedRef.current = unfolded;
   useEffect(() => {
-    if (level !== "cadet" || !hint || seen.current === hint.about) return;
+    // (Not while recording: a hint then opens only when asked for, so nothing comes up over the stage by itself.)
+    if (level !== "cadet" || !hint || seen.current === hint.about || castOn()) return;
     seen.current = hint.about;
     setShowHint(true);
     setUnfolded(false);
@@ -143,8 +155,9 @@ export function QuestBar({ snap, onAsk, goal = "none", onDefine }: { snap: Snaps
             </button>
           )}
           {conditions.map((k) => (
-            <button key={k.id} className={`quest-item ${k.met === null ? "open" : k.met ? "met" : "unmet"}`} title={`${k.title} — ${k.evidence}. Click to ask your AI about it.`} onClick={() => onAsk(k.met ? `How much room do we have on this: "${k.title}"? (${k.evidence})` : `"${k.title}" is not met yet (${k.evidence}). What ways are there to get there, and what does each cost?`)}>
-              <b>{k.met === null ? "–" : k.met ? "✓" : "✗"}</b><span>{k.title}</span>
+            <button key={k.id} className={`quest-item ${k.met === null ? "open" : k.met ? "met" : "unmet"}${fresh.includes(String(k.id)) ? " just" : ""}`} title={`${k.title} — ${k.evidence}.${k.met && solved[String(k.id)] ? ` Solved by ${solved[String(k.id)]!.who}.` : ""} Click to ask your AI about it.`} onClick={() => onAsk(k.met ? `How much room do we have on this: "${k.title}"? (${k.evidence})` : `"${k.title}" is not met yet (${k.evidence}). What ways are there to get there, and what does each cost?`)}>
+              <b>{k.met === null ? "–" : k.met ? <svg className="tick" viewBox="0 0 16 16" aria-label="met"><path d="M2.5 8.6l3.4 3.4L13.5 4.2" /></svg> : "✗"}</b><span>{k.title}</span>{k.met && solved[String(k.id)] ? <em className="by" style={{ background: solved[String(k.id)]!.color }} aria-label={`solved by ${solved[String(k.id)]!.who}`} /> : null}
+              {fresh.includes(String(k.id)) && <i className="won" aria-hidden>{Array.from({ length: 10 }, (_, n) => <u key={n} style={{ ["--a" as string]: `${n * 36}deg` }} />)}</i>}
             </button>
           ))}
         </span>
@@ -161,8 +174,11 @@ export function QuestBar({ snap, onAsk, goal = "none", onDefine }: { snap: Snaps
       {cheer && (
         <div key={cheer.id} className={`quest-cheer ${cheer.big ? "big" : ""}`} aria-live="polite">
           <div className="burst" aria-hidden>{Array.from({ length: 14 }, (_, i) => <i key={i} style={{ ["--a" as string]: `${(i / 14) * 360}deg` }} />)}</div>
+          <svg className="seal" viewBox="0 0 64 64" aria-hidden><circle cx="32" cy="32" r="27" /><circle className="halo" cx="32" cy="32" r="27" /><path d="M18.5 33.5l9 9 18.5-21" /></svg>
           <div className="head">{cheer.head}</div>
           <div className="text">{cheer.text}</div>
+          {cheer.cond && solved[cheer.cond] && <div className="credits"><span style={{ color: solved[cheer.cond]!.color }}>solved by {solved[cheer.cond]!.who}</span></div>}
+          {cheer.crew && credits.length > 1 && <div className="credits">{credits.map((c) => <span key={c.who} style={{ color: c.color }}>{c.who} {"✓".repeat(c.n)}</span>)}</div>}
         </div>
       )}
     </div>

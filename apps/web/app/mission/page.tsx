@@ -10,18 +10,33 @@ import { MissionClock } from "@/components/MissionClock";
 import { AiQueue, Coach, EXPLAIN, Tutorial, Viewfinder } from "@/components/MissionExtras";
 import { DefineMission, DesignsPanel } from "@/components/MissionGame";
 import { hintFor, QuestBar } from "@/components/MissionQuest";
-import { type CrewEvent, CrewFeed } from "@/components/MissionCrew";
+import { PlayPanel, SayBar } from "@/components/MissionPlay";
+import { type CrewEvent, CrewFeed, GameChat } from "@/components/MissionCrew";
 import { AiPanel, AnalysisPanel, type Ctx, DesignPanel, EvaluationDashboard, LogPanel, ObjectivesPanel, ReviewPanel } from "@/components/MissionPanels";
 import { go as navigate, type Account, api, currentAccount, type Evaluation, fmt, type Presence, type Snapshot } from "@/lib/api";
 import { bus } from "@/lib/bus";
+import { castOn, shown, shownText } from "@/lib/cast";
+import { sfx } from "@/lib/sfx";
 import { Collab } from "@/lib/collab";
 import type { ViewMode } from "@/lib/scene/MissionScene";
 import { type SiteKind, siteKindFor } from "@/lib/scene/site";
 import type { SpatialStatus, Workspace, XrSupport } from "@/lib/xr/workspace";
 
 const PHASES = ["concept", "trade", "design", "review", "submitted"];
+
+/** The mission as the side panels draw it: in recording mode the crew's names are drawn without their suffix (see lib/cast). */
+const viewed = new WeakMap<object, Snapshot>();
+function viewOf(snap: Snapshot): Snapshot {
+  if (!castOn()) return snap;
+  let view = viewed.get(snap);
+  if (!view) {
+    view = { ...snap, session: { ...snap.session, members: snap.session.members.map((m: any) => ({ ...m, displayName: shown(m.displayName) })) } } as Snapshot;
+    viewed.set(snap, view);
+  }
+  return view;
+}
 type Toast = { id: number; message: string; tone: string; out?: boolean };
-type Tab = "design" | "ai" | "analysis" | "designs" | "review" | "log" | "systems";
+type Tab = "play" | "design" | "ai" | "analysis" | "designs" | "review" | "log" | "systems";
 
 /** Headline metrics, each tied to the engineering model that produces it (so it can pulse when recalculated). */
 /**
@@ -38,7 +53,7 @@ function showPlace(ws: Workspace, snap: Snapshot): void {
   const sharp = ((snap.scenario as any).objectives ?? []).find((o: any) => o.category === "science" && o.metric?.field === "bestImagingResolutionM");
   const need = sharp ? (snap.evaluation.objectives as any[]).find((o) => o.id === sharp.id)?.target ?? null : null;
   const now = (snap.mission.derived["science.return"]?.value as any)?.bestImagingResolutionM ?? null;
-  ws.scene.setSite({ kind: (world?.site as SiteKind | undefined) ?? siteKindFor(words), name: target?.name ?? brief?.title ?? snap.scenario.title, nowM: typeof now === "number" ? now : null, needM: typeof need === "number" ? need : null });
+  ws.scene.setSite(!target ? null : { kind: (world?.site as SiteKind | undefined) ?? siteKindFor(words), name: target.name, world: snap.mission.config.centralBody === "earth" ? "Earth" : snap.mission.config.centralBody === "moon" ? "the Moon" : "Mars", nowM: typeof now === "number" ? now : null, needM: typeof need === "number" ? need : null });
 }
 
 function metrics(snap: Snapshot): { node: string; k: string; v: string; u: string; tone?: string }[] {
@@ -71,7 +86,8 @@ export default function MissionPage() {
   const [proposals, setProposals] = useState<any[]>([]);
   const [link, setLink] = useState<{ status: string; detail?: string }>({ status: "connecting" });
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("ai");
+  // The game opens on its own steps (Play); the AI is one tab over, and every step can be said to it instead.
+  const [tab, setTab] = useState<Tab>("play");
   const [mode, setMode] = useState<ViewMode>("orbit");
   const [selected, setSelected] = useState<string | null>(null);
   // The headset callbacks are created once; they read the current selection through this.
@@ -100,9 +116,20 @@ export default function MissionPage() {
   const pointing = useRef(new Set<string>());
   // AI crewmates in this mission (software players the lead brought in).
   const [aiCrew, setAiCrew] = useState<{ here: boolean; busy: boolean }>({ here: false, busy: false });
+  // What a crewmate just said, large over the stage (so what the AI crewmates do can be followed without reading the feed),
+  // and whether the view goes where the crew is working.
+  const [caption, setCaption] = useState<{ who: string; color: string; text: string; id: string } | null>(null);
+  const [follow, setFollow] = useState(true);
+  const followRef = useRef(true);
+  followRef.current = follow;
+  const spoke = useRef(new Map<string, number>());
   // What the crew has been doing, newest last: shown beside the stage and (the latest message) in the headset.
   const [feed, setFeed] = useState<CrewEvent[]>([]);
-  const note = useCallback((e: Omit<CrewEvent, "id" | "at"> & { id?: string; at?: number }): void => setFeed((list) => (e.id && list.some((x) => x.id === e.id) ? list : [...list, { id: e.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, at: e.at ?? Date.now(), ...e }].sort((a, b) => a.at - b.at).slice(-60))), []);
+  const note = useCallback((e: Omit<CrewEvent, "id" | "at"> & { id?: string; at?: number }): void => setFeed((list) => (e.id && list.some((x) => x.id === e.id) ? list : [...list, { id: e.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, at: e.at ?? Date.now(), ...e, who: shown(e.who), text: shownText(e.text) }].sort((a, b) => a.at - b.at).slice(-60))), []);
+  // Who met each of the mission's conditions: the crew member whose change took it from open to met.
+  const [solved, setSolved] = useState<Record<string, { who: string; color: string }>>({});
+  const lastCause = useRef<{ by: string; displayName: string; version: number; at: number } | null>(null);
+  const metBefore = useRef<{ sid: string; met: Record<string, boolean> } | null>(null);
   const colorOf = (accountId: string | undefined): string => presenceRef.current.find((p) => p.accountId === accountId)?.color ?? "#9fb0d0";
   const presenceRef = useRef<Presence[]>([]);
   const toastId = useRef(0);
@@ -111,7 +138,7 @@ export default function MissionPage() {
 
   const toast = useCallback((message: string, tone = "info") => {
     const id = ++toastId.current;
-    setToasts((t) => [...t.slice(-3), { id, message, tone }]);
+    setToasts((t) => [...t.slice(-3), { id, message: shownText(message), tone }]);
     setTimeout(() => setToasts((t) => t.map((x) => (x.id === id ? { ...x, out: true } : x))), 4600);
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 5000);
   }, []);
@@ -180,10 +207,21 @@ export default function MissionPage() {
           setPulsed({ nodes: u.mission.recalculated, key: u.mission.version });
           workspace.current?.scene.pulse();
           const mine = u.cause.by === acc.id;
-          note({ id: `v${u.mission.version}`, who: mine ? "You" : u.cause.displayName, color: colorOf(u.cause.by), kind: "did", text: u.cause.summary });
-          toast(`${mine ? "You" : u.cause.displayName} · ${u.cause.summary} — ${u.mission.recalculated.length} model${u.mission.recalculated.length === 1 ? "" : "s"} recalculated`, mine ? "ok" : "info");
+          // Whoever made this change is the one who solved whatever it took from open to met (see the effect on the evaluation).
+          lastCause.current = { by: u.cause.by, displayName: String(u.cause.displayName), version: u.mission.version, at: Date.now() };
+          sfx(/^(add|install)\b/i.test(u.cause.summary) ? "add" : /^(connect|fit)\b/i.test(u.cause.summary) ? "connect" : "change");
+          if (!/ · AI$/.test(String(u.cause.displayName))) note({ id: `v${u.mission.version}`, who: mine ? "You" : u.cause.displayName, color: colorOf(u.cause.by), kind: "did", text: u.cause.summary });
+          if (!/ · AI$/.test(String(u.cause.displayName))) toast(`${mine ? "You" : u.cause.displayName} · ${u.cause.summary} — ${u.mission.recalculated.length} model${u.mission.recalculated.length === 1 ? "" : "s"} recalculated`, mine ? "ok" : "info");
         },
-        game: (u) => setSnap((prev) => prev && { ...prev, game: u.game, evaluation: u.evaluation, maturity: u.maturity, roles: u.roles ?? prev.roles }),
+        game: (u) => {
+          // A flight was run: the engines, then how it ended.
+          if ((u.game?.simulationsRun ?? 0) > (snapRef.current?.game?.simulationsRun ?? 0)) {
+            sfx("launch");
+            const verdict = u.evaluation?.outcome?.verdict;
+            setTimeout(() => sfx(verdict === "success" ? "success" : verdict === "partial" ? "partial" : "fail"), 1500);
+          }
+          setSnap((prev) => prev && { ...prev, game: u.game, evaluation: u.evaluation, maturity: u.maturity, roles: u.roles ?? prev.roles });
+        },
         members: (members) => {
           setSnap((prev) => prev && { ...prev, session: { ...prev.session, members } });
           const me = members.find((m: any) => m.accountId === acc.id);
@@ -192,14 +230,23 @@ export default function MissionPage() {
         presence: setPresence,
         presenceUpdate: (p) => {
           // A crewmate started pointing at a place: say so once, the mark itself is on the world.
+          // An AI crewmate says in its own line what it is pointing at; the mark is on the world.
+          if (p.point && !pointing.current.has(p.clientId) && / · AI$/.test(p.displayName)) { pointing.current.add(p.clientId); sfx("point"); }
           if (p.point && !pointing.current.has(p.clientId)) { pointing.current.add(p.clientId); note({ who: p.displayName, color: p.color, kind: "points", text: `is pointing at ${Math.abs(p.point[0]!).toFixed(1)}°${p.point[0]! >= 0 ? "N" : "S"} ${Math.abs(p.point[1]!).toFixed(1)}°${p.point[1]! >= 0 ? "E" : "W"}` }); toast(`${p.displayName} is pointing at a place on the ${snapRef.current?.mission.config.centralBody ?? "world"}: look for their mark in the Orbit view.`, "info"); }
+          if (p.point && !pointing.current.has(p.clientId)) sfx("point");
           if (p.point === null) pointing.current.delete(p.clientId);
           setPresence((list) => (list.some((x) => x.clientId === p.clientId) ? list.map((x) => (x.clientId === p.clientId ? { ...x, ...p } : x)) : [...list, p]));
         },
         say: (m) => {
           const mine = m.accountId === acc.id;
           note({ id: `m${m.id}`, at: m.at, who: mine ? "You" : m.displayName, color: m.color, kind: "said", text: m.text });
-          if (!mine && Date.now() - m.at < 15000) { toast(`${m.displayName}: ${m.text}`, "info"); lastSaid.current = { who: m.displayName, text: m.text, at: m.at }; setSaidTick((n) => n + 1); }
+          if (!mine && Date.now() - m.at < 15000) {
+            sfx("talk");
+            spoke.current.set(m.accountId, Date.now());
+            setCaption({ who: m.displayName, color: m.color, text: m.text, id: m.id });
+            setTimeout(() => setCaption((c) => (c?.id === m.id ? null : c)), Math.min(9000, 3200 + m.text.length * 35));
+          }
+          if (!mine && Date.now() - m.at < 15000) { if (!/ · AI$/.test(m.displayName)) toast(`${m.displayName}: ${m.text}`, "info"); lastSaid.current = { who: shown(m.displayName), text: shownText(m.text), at: m.at }; setSaidTick((n) => n + 1); }
         },
         locks: (locks) => setSnap((prev) => prev && { ...prev, locks }),
         request: (r) => {
@@ -208,10 +255,10 @@ export default function MissionPage() {
           if (!seenRequests.current.has(r.id)) {
             seenRequests.current.add(r.id);
             if (!r.action) note({ id: `r${r.id}`, who: r.user?.id === acc.id ? "You" : (first.session.members.find((m: any) => m.accountId === r.user?.id)?.displayName ?? "A teammate"), color: colorOf(r.user?.id), kind: "asked", text: r.private && r.user?.id !== acc.id ? "(a private question)" : String(r.text ?? "").slice(0, 110) });
-            if (r.user?.id !== acc.id) toast(`${first.session.members.find((m: any) => m.accountId === r.user?.id)?.displayName ?? "A teammate"} asked the AI: ${String(r.text).slice(0, 90)}`, "info");
+            if (r.user?.id !== acc.id && !r.action && !/ · AI$/.test(String(snapRef.current?.session.members.find((m: any) => m.accountId === r.user?.id)?.displayName ?? ""))) toast(`${snapRef.current?.session.members.find((m: any) => m.accountId === r.user?.id)?.displayName ?? "A teammate"} asked the AI: ${String(r.text).slice(0, 90)}`, "info");
           }
         },
-        proposal: (p) => setProposals((list) => [p, ...list.filter((x) => x.id !== p.id)]),
+        proposal: (p) => { if (p?.status === "awaiting_approval") sfx("ask"); setProposals((list) => [p, ...list.filter((x) => x.id !== p.id)]); },
         transform: (t) => workspace.current?.scene.previewTransform(t.nodeId, t.pose),
         clock: (k) => {
           // A crewmate turned the world: this scene follows.
@@ -305,7 +352,48 @@ export default function MissionPage() {
     showPlace(ws, snap);
     ws.refresh();
   }, [snap?.mission.version]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { workspace.current?.scene.setPresence(presence, presence.find((p) => p.accountId === account?.id && p.mode === (xr.active ? "xr" : "desktop"))?.clientId ?? null); }, [presence, account, xr.active]);
+  // Who solved what: when a condition of the mission goes from open to met, the crew member whose change did it is
+  // credited (in the game chat, on the objective, and with the result). The flight itself belongs to the whole crew.
+  useEffect(() => {
+    if (!snap) return;
+    const conditions = (((snap.evaluation as any)?.outcome?.conditions ?? []) as any[]);
+    const prev = metBefore.current;
+    metBefore.current = { sid: snap.session.id, met: Object.fromEntries(conditions.map((k) => [String(k.id), k.met === true])) };
+    if (!prev || prev.sid !== snap.session.id) return;
+    const won = conditions.filter((k) => k.id !== "flight" && k.met === true && prev.met[String(k.id)] === false);
+    if (!won.length) return;
+    const me = account?.id;
+    // The author of a change arrives with its version message, which can come a moment after the new evaluation.
+    setTimeout(() => {
+      const cause = lastCause.current;
+      if (!cause || Date.now() - cause.at > 5000) return;
+      const who = cause.by === me ? "You" : cause.displayName;
+      const color = colorOf(cause.by);
+      setSolved((p) => ({ ...p, ...Object.fromEntries(won.map((k) => [String(k.id), { who: shown(who), color }])) }));
+      for (const k of won) note({ id: `won:${k.id}:${cause.version}`, who, color, kind: "won", text: `solved ✓ ${k.title}` });
+    }, 400);
+  }, [snap?.evaluation, snap?.mission.version]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Are the AI crewmates in this mission already (the page may have been opened after they joined)?
+  useEffect(() => {
+    if (!sid) return;
+    void api<{ crewmates: string[] }>("GET", `/api/sessions/${sid}/crewmates`).then((r) => setAiCrew((a) => (a.busy ? a : { here: r.crewmates.length > 0, busy: false }))).catch(() => undefined);
+  }, [sid]);
+  // The AI crewmates' probes go where each is working; with "follow" on, the view goes there too.
+  const lastFocus = useRef(new Map<string, string>());
+  useEffect(() => {
+    const ws = workspace.current;
+    if (!ws) return;
+    const ai = presence.filter((p) => / · AI$/.test(p.displayName));
+    // A crewmate is seen as where it points (a named ring on a part, its mark on the world), not as a figure.
+    ws.scene.setCrewProbes([]);
+    if (!followRef.current || xr.active) return;
+    for (const p of ai) {
+      const key = p.point ? "point" : p.focus ?? "";
+      if (key && lastFocus.current.get(p.clientId) !== key) { lastFocus.current.set(p.clientId, key); setMode(p.point ? "orbit" : "systems"); }
+      if (!key) lastFocus.current.delete(p.clientId);
+    }
+  }, [presence, caption, xr.active]);
+  useEffect(() => { workspace.current?.scene.setPresence(castOn() ? presence.map((p) => ({ ...p, displayName: shown(p.displayName) })) : presence, presence.find((p) => p.accountId === account?.id && p.mode === (xr.active ? "xr" : "desktop"))?.clientId ?? null); }, [presence, account, xr.active]);
   useEffect(() => { workspace.current?.setMode(mode); }, [mode]);
 
 
@@ -369,6 +457,7 @@ export default function MissionPage() {
   // A mission just started from the board or the lobby begins with its goal: what is this crew going for? (After the
   // first-visit walkthrough, if that is showing. It can be closed and set later from the strip above the stage.)
   const askedGoal = useRef(false);
+  const broughtCrew = useRef(false);
   useEffect(() => {
     if (askedGoal.current || !snap || !you || typeof window === "undefined") return;
     if (new URLSearchParams(window.location.search).get("new") !== "1") return;
@@ -378,9 +467,14 @@ export default function MissionPage() {
       clearInterval(timer);
       if (!askedGoal.current) { askedGoal.current = true; setDefining(true); }
     }, 600);
+    if (!broughtCrew.current && snap.session.members.length === 1 && new URLSearchParams(window.location.search).get("crew") === "ai") {
+      broughtCrew.current = true;
+      setAiCrew({ here: false, busy: true });
+      void api<{ crewmates: string[] }>("POST", `/api/sessions/${snap.session.id}/crewmates`, { count: 3 }).then((r) => setAiCrew({ here: r.crewmates.length > 0, busy: false })).catch(() => setAiCrew({ here: false, busy: false }));
+    }
     return () => clearInterval(timer);
   }, [snap, you]);
-  const ctx: Ctx | null = snap && collab.current && account && sid ? { sid, snap, collab: collab.current, role: you?.role ?? "viewer", accountId: account.id, presence, requests, proposals, selected, setSelected, toast, setPreviewDay, reloadLists } : null;
+  const ctx: Ctx | null = snap && collab.current && account && sid ? { sid, snap: viewOf(snap), collab: collab.current, role: you?.role ?? "viewer", accountId: account.id, presence, requests, proposals, selected, setSelected, toast, setPreviewDay, reloadLists } : null;
   const phaseIndex = snap ? PHASES.indexOf(snap.game.phase) : 0;
   const support = xr.support;
 
@@ -394,16 +488,17 @@ export default function MissionPage() {
             <a className="brand" href="/lobby" title="Back to missions"><span className="brand-mark" /></a>
             <div className="grow">
               <div style={{ font: "800 16px var(--font-display)", fontStretch: "118%", textTransform: "uppercase", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{snap.session.name}</div>
-              <div className="dim" style={{ fontSize: 11 }}>{snap.session.mode === "sandbox" ? "Sandbox · unranked · " : ""}{snap.scenario.title} · {snap.session.difficulty} · seed {snap.session.seed}</div>
+              <div className="dim" style={{ fontSize: 11 }}>{snap.session.mode === "sandbox" ? "Sandbox · unranked · " : ""}{snap.mission.config.spacecraft.name} · {snap.mission.config.centralBody === "earth" ? "Earth orbit" : snap.mission.config.centralBody === "moon" ? "the Moon" : "Mars"} · {snap.session.difficulty}</div>
             </div>
             <div className="phase">{PHASES.map((p, i) => <span key={p} className={`step ${i < phaseIndex ? "done" : i === phaseIndex ? "now" : ""}`}>{p}</span>)}</div>
             <button className="score-ring" style={{ ["--p" as any]: snap.evaluation.score, border: 0, cursor: "pointer" }} title="Open the evaluation dashboard" onClick={() => setDashboard({ evaluation: snap.evaluation })}><span>{snap.evaluation.score.toFixed(0)}</span></button>
             <span className="chip info" title={snap.maturity.basis}>CML {snap.maturity.level}</span>
             <span className="chip mono" key={snap.mission.version} style={{ animation: "recalc 1.2s" }}>v{snap.mission.version}</span>
-            <div className="row" style={{ paddingLeft: 6 }}>{presence.map((p) => <span key={p.clientId} className="avatar" style={{ background: p.color }} title={`${p.displayName} · ${p.mode === "xr" ? "in headset" : "desktop"}${p.focus ? ` · editing ${p.focus}` : ""}`}>{p.mode === "xr" ? "◉" : p.displayName.slice(0, 2).toUpperCase()}</span>)}</div>
+            <div className="row" style={{ paddingLeft: 6 }}>{presence.map((p) => <span key={p.clientId} className="avatar" style={{ background: p.color }} title={`${shown(p.displayName)} · ${p.mode === "xr" ? "in headset" : "desktop"}${p.focus ? ` · editing ${p.focus}` : ""}`}>{p.mode === "xr" ? "◉" : p.displayName.slice(0, 2).toUpperCase()}</span>)}</div>
             <span className={`chip ${link.status === "live" ? "ok" : "warn"}`} title={link.detail}><span className={`dot ${link.status === "live" ? "live" : ""}`} />{link.status}{collab.current?.latencyMs ? ` · ${collab.current.latencyMs.toFixed(0)} ms` : ""}</span>
-            <div className="tabs" style={{ width: 170 }}>
+            <div className="tabs" style={{ width: snap.session.world?.target ? 250 : 170 }}>
               <button className={`tab ${mode === "orbit" ? "active" : ""}`} onClick={() => setMode("orbit")}>Orbit</button>
+              {snap.session.world?.target && <button className={`tab ${mode === "site" ? "active" : ""}`} title={`The ground at ${snap.session.world.target.name}: what the spacecraft's instruments look at, and how sharply`} onClick={() => setMode("site")}>Target</button>}
               <button className={`tab ${mode === "systems" ? "active" : ""}`} onClick={() => setMode("systems")}>Systems</button>
             </div>
             {support?.immersiveAr && <button className="btn primary sm" onClick={() => workspace.current?.enterXr("ar")}>Enter MR</button>}
@@ -416,20 +511,22 @@ export default function MissionPage() {
             <Viewfinder snap={snap} mode={mode} />
             {/* One overlay at a time on the stage: a selected part's card takes the place of the crew queue and the coach strip. */}
             <Tutorial />
+            <GameChat events={feed} seats={Object.fromEntries(Object.entries((snap.game.roleClaims ?? {}) as Record<string, string>).map(([seat, id]) => [id === account?.id ? "You" : shown(String(snap.session.members.find((m: any) => m.accountId === id)?.displayName ?? "")), seat]))} />
+            {presence.some((p) => / · AI$/.test(p.displayName)) && <button className={`btn sm ${follow ? "primary" : ""}`} style={{ position: "absolute", right: 8, top: 128, pointerEvents: "auto" }} title={castOn() ? "The view goes to wherever a crewmate is working" : "The view goes to wherever an AI crewmate is working"} onClick={() => setFollow(!follow)}>{follow ? "◉ Following the crew" : "Follow the crew"}</button>}
             {/* The game over the engineering: stars, the objectives that tick off, hints at the easier levels. */}
-            <CrewFeed events={feed} presence={presence} seats={4} selfId={account?.id ?? ""} roles={Object.fromEntries(Object.entries((snap.game.roleClaims ?? {}) as Record<string, string>).map(([seat, id]) => [id, seat]))}
+            <CrewFeed cast={castOn()} events={feed} presence={presence} seats={4} selfId={account?.id ?? ""} roles={Object.fromEntries(Object.entries((snap.game.roleClaims ?? {}) as Record<string, string>).map(([seat, id]) => [id, seat]))}
               watches={snap.roles ?? []} names={Object.fromEntries(snap.session.members.map((m: any) => [m.accountId, m.displayName]))} canTake={you?.role !== "viewer" && !snap.game.submitted}
               ai={{ canAsk: you?.role === "lead" && !snap.game.submitted, here: aiCrew.here, busy: aiCrew.busy,
                 onBring: () => { setAiCrew({ here: false, busy: true }); void api<{ crewmates: string[] }>("POST", `/api/sessions/${sid}/crewmates`, { count: 3 }).then((r) => { setAiCrew({ here: r.crewmates.length > 0, busy: false }); toast(r.crewmates.length ? `${r.crewmates.join(", ")} joined your crew.` : "There is no free seat for an AI crewmate.", "info"); }).catch((err) => { setAiCrew({ here: false, busy: false }); toast((err as Error).message, "warn"); }); },
                 onDismiss: () => { setAiCrew({ here: true, busy: true }); void api("DELETE", `/api/sessions/${sid}/crewmates`).then(() => setAiCrew({ here: false, busy: false })).catch(() => setAiCrew({ here: true, busy: false })); } }}
               onTake={(seat) => void api("POST", `/api/sessions/${sid}/role`, { seat }).catch((err) => toast((err as Error).message, "warn"))}
-              waiting={(() => { const p = proposals.find((x) => x.status === "awaiting_approval"); if (!p) return null; const r = requests.find((x) => x.proposalId === p.id); return { summary: String(r?.summary ?? r?.text ?? "a change").slice(0, 90), by: snap.session.members.find((m: any) => m.accountId === r?.user?.id)?.displayName ?? "a crew member" }; })()}
+              waiting={(() => { const p = proposals.find((x) => x.status === "awaiting_approval"); if (!p) return null; const r = requests.find((x) => x.proposalId === p.id); return { summary: String(r?.summary ?? r?.text ?? "a change").slice(0, 90), by: shown(snap.session.members.find((m: any) => m.accountId === r?.user?.id)?.displayName ?? "a crew member") }; })()}
               onSay={(t) => collab.current?.say(t)} onOpenWaiting={() => setTab("ai")} />
-            <QuestBar goal={snap.session.mode === "sandbox" ? "none" : snap.game.charter ? "set" : "open"} onDefine={() => setDefining(true)} snap={snap} onAsk={(text) => { setSelected(null); setTab("ai"); setTimeout(() => bus.send("ask", text), 0); }} />
-            <button className="btn sm ghost" style={{ position: "absolute", left: 8, top: 8, pointerEvents: "auto" }} onClick={() => setCollapsed(!collapsed)}>{collapsed ? "▸ Objectives" : "◂"}</button>
-            {mode === "orbit" && <button className={`btn sm ${chase ? "primary" : ""}`} style={{ position: "absolute", right: 8, top: 40, pointerEvents: "auto" }} title="Fly the camera alongside the spacecraft" onClick={() => { const next = !chase; setChase(next); if (next) setEarthView(false); workspace.current?.follow(next); }}>{chase ? "◉ Craft cam" : "Craft cam"}</button>}
-            {mode === "orbit" && snap.mission.config.centralBody !== "earth" && <button className={`btn sm ${earthView ? "primary" : ""}`} style={{ position: "absolute", right: 8, top: 74, pointerEvents: "auto" }} title="Look back from Earth: see the phase this world shows from home, and watch it change as you turn time" onClick={() => { const next = !earthView; setEarthView(next); if (next) setChase(false); workspace.current?.viewFromEarth(next); }}>{earthView ? "◉ From Earth" : "From Earth"}</button>}
-            <div className="stage-bottom"><Coach snap={snap} /><div className="tiles">
+            <QuestBar solved={solved} goal={snap.session.mode === "sandbox" ? "none" : snap.game.charter ? "set" : "open"} onDefine={() => setDefining(true)} snap={snap} onAsk={(text) => { setSelected(null); setTab("ai"); setTimeout(() => bus.send("ask", text), 0); }} />
+            <button className="btn sm ghost" style={{ position: "absolute", left: 8, top: 60, pointerEvents: "auto" }} onClick={() => setCollapsed(!collapsed)}>{collapsed ? "▸ Objectives" : "◂"}</button>
+            {mode === "orbit" && <button className={`btn sm ${chase ? "primary" : ""}`} style={{ position: "absolute", right: 8, top: 60, pointerEvents: "auto" }} title="Fly the camera alongside the spacecraft" onClick={() => { const next = !chase; setChase(next); if (next) setEarthView(false); workspace.current?.follow(next); }}>{chase ? "◉ Craft cam" : "Craft cam"}</button>}
+            {mode === "orbit" && snap.mission.config.centralBody !== "earth" && <button className={`btn sm ${earthView ? "primary" : ""}`} style={{ position: "absolute", right: 8, top: 94, pointerEvents: "auto" }} title="Look back from Earth: see the phase this world shows from home, and watch it change as you turn time" onClick={() => { const next = !earthView; setEarthView(next); if (next) setChase(false); workspace.current?.viewFromEarth(next); }}>{earthView ? "◉ From Earth" : "From Earth"}</button>}
+            <div className="stage-bottom"><SayBar c={ctx} onOpen={() => setTab("ai")} /><div className="tiles">
               {tiles.map((t) => (
                 <div key={`${t.k}:${pulsed.nodes.includes(t.node) ? pulsed.key : 0}`} className={`metric glass ${pulsed.nodes.includes(t.node) ? "pulse" : ""}`} title={`${EXPLAIN[t.k] ?? ""} (model: ${t.node})`}>
                   <div className="k">{t.k}</div><div className="v" style={{ color: t.tone === "bad" ? "var(--red)" : undefined }}>{t.v}<span className="u">{t.u}</span></div>
@@ -444,8 +541,9 @@ export default function MissionPage() {
               return <PartCard c={ctx} part={part} onClose={() => setSelected(null)} onAdjust={() => setTab("design")} />;
             })()}
             {/* What the crew's AIs are doing, inside the side panel: nothing floats over the 3D stage. */}
-            {tab !== "ai" && !selected && <AiQueue requests={requests.filter((r) => ["queued", "analyzing", "planning", "executing", "awaiting_approval", "awaiting_clarification"].includes(r.status))} members={snap.session.members} onOpen={() => setTab("ai")} />}
-            <div className="tabs">{(["ai", "design", "systems", "analysis", "designs", "review", "log"] as Tab[]).map((t) => <button key={t} className={`tab ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>{t === "ai" ? `AI${proposals.some((p) => p.status === "awaiting_approval") ? " •" : ""}` : t}</button>)}</div>
+            {tab !== "ai" && !selected && <AiQueue requests={requests.filter((r) => ["queued", "analyzing", "planning", "executing", "awaiting_approval", "awaiting_clarification"].includes(r.status))} members={viewOf(snap).session.members} onOpen={() => setTab("ai")} />}
+            <div className="tabs">{(["play", "ai", "design", "systems", "analysis", "designs", "review", "log"] as Tab[]).map((t) => <button key={t} className={`tab ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>{t === "ai" ? `AI${proposals.some((p) => p.status === "awaiting_approval") ? " •" : ""}` : t}</button>)}</div>
+            {tab === "play" && <PlayPanel c={ctx} onOpen={(t) => setTab(t as Tab)} />}
             {tab === "design" && <DesignPanel c={ctx} />}
             {tab === "ai" && <AiPanel c={ctx} />}
             {tab === "systems" && <SystemsPanel c={ctx} />}
