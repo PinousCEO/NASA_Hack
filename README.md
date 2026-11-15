@@ -11,6 +11,7 @@ A collaborative space-mission design game for the web and mixed reality.<br>
 <a href="#a-two-minute-tour">Tour</a> ·
 <a href="#how-it-answers-the-challenge">Challenge fit</a> ·
 <a href="#run-it">Run it</a> ·
+<a href="#technical-overview">Technical overview</a> ·
 <a href="#use-of-artificial-intelligence">Use of AI</a> ·
 <a href="#nasa-data-and-resources">NASA data</a>
 </p>
@@ -182,6 +183,49 @@ Anything a language model writes is treated as data: it is schema-checked, built
 published only after it passes (and, where it changes the shared design beyond a player's rights, after the lead
 says yes). Generated control logic runs in a sandbox (QuickJS/WASM) with limits; no model output is executed
 directly in the shared mission.
+
+## Technical overview
+
+There is no hosted instance: the whole game, server included, is in this repository and runs on one machine with the three commands above. A headset on the same network (or over USB) connects to that machine.
+
+```mermaid
+flowchart LR
+  subgraph Clients
+    W[Web client<br/>Next.js · React · Three.js]
+    X[Mixed reality<br/>WebXR · IWSDK · bare hands · voice]
+    C[AI crewmates<br/>rule-driven, same public API]
+  end
+  subgraph Server["Node.js server (authoritative state)"]
+    H[HTTP API + WebSocket hub]
+    P[Request pipeline<br/>analyse → plan → build in a test copy → test → publish]
+    M[Engineering models<br/>orbit · eclipse · power · link · data · mass · cost · schedule]
+    G[Game<br/>daily missions · flight simulation · events · scoring]
+    K[Record of earlier crews<br/>retrieved for the next crew's AI]
+  end
+  L[(Language model<br/>OpenAI API)]
+  N[(NASA data<br/>GIBS · Treks · PDS · JPL)]
+  W <--> H
+  X <--> H
+  C <--> H
+  H --> P --> M
+  H --> G --> M
+  P <--> L
+  G <--> L
+  P <--> K
+  M <--> N
+```
+
+**One source of truth.** Clients send intent (an edit, a request in words, where they are pointing). The server validates it, applies it to the mission's current version, recalculates only the models that depend on what changed, and broadcasts the new version to every client in the mission. Two people changing the same value at once: the later one is turned back with the current value; changes to different values merge.
+
+**From a sentence to hardware.** A request in words goes through a fixed pipeline: read the mission's state, analyse the request (with passages retrieved from the record of earlier crews), find the capabilities that can do it, plan, build the change in a test copy of the mission, run the engineering checks on that copy, and publish it to the shared mission (after the lead's approval where the change needs it). What a language model writes is data for this pipeline: it is validated against a schema, and generated control logic runs in a QuickJS/WebAssembly sandbox with time and memory limits. Model output is never executed directly.
+
+**Engineering models.** Two-body orbits with a J2 propagator for comparison, eclipse fraction, solar array and battery sizing, link budget with pointing loss, data produced against data sent down, mass and launch capacity (including the loss for polar orbits), a development schedule, and a day-by-day flight with seeded events. These are deterministic and tested against reference values; they are first-order models, and cost, schedule and launch figures are game models.
+
+**Mixed reality.** One Three.js scene serves both the desktop page and the headset (`immersive-ar`, falling back to `immersive-vr`). Hands are read from WebXR hand tracking: palm orientation to summon the mission, pinch to turn and scale, a fingertip on the globe to point. Speech is recorded in the headset and transcribed on the server.
+
+**Data.** Planet imagery and elevation are fetched from NASA services through an allow-listed proxy and cached on disk. State is kept as versioned JSON under `.data/`; an audit log is hash-chained. Secrets are read from the environment only.
+
+**Tests.** 159 unit and integration tests (`npm test`), 51 browser checks including the WebXR emulator (`npm run e2e`), and scripted play-throughs whose output is kept under `reports/evidence/`.
 
 ## Use of artificial intelligence
 
