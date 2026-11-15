@@ -7,20 +7,13 @@ A collaborative space-mission design game for the web and mixed reality.<br>
 <p align="center"><img src="docs/img/mixed-reality-palm.jpg" alt="The mission floating above an open hand in mixed reality, with the web client on the monitor behind" width="88%"></p>
 
 <p align="center">
+<a href="#the-game-in-pictures">The game in pictures</a> ·
 <a href="#a-two-minute-tour">Tour</a> ·
 <a href="#how-it-answers-the-challenge">Challenge fit</a> ·
 <a href="#run-it">Run it</a> ·
 <a href="#use-of-artificial-intelligence">Use of AI</a> ·
 <a href="#nasa-data-and-resources">NASA data</a>
 </p>
-
-| Say it, and the AI builds it | A crew that can see each other | A new mission every day |
-|:---:|:---:|:---:|
-| <img src="docs/img/mixed-reality-build.jpg" alt="The player's AI building a part onto the spacecraft in mixed reality"> | <img src="docs/img/crew-at-work.jpg" alt="The web client: crew names on the parts they are working on, and the game chat"> | <img src="docs/img/board.jpg" alt="The mission board: missions on Earth, the Moon and Mars at three levels"> |
-
-A crew of up to four designs, manages and flies a complete space mission: they choose what the mission is for, build
-the spacecraft, pick instruments, an orbit and a launch vehicle, keep inside mass, power, budget and schedule, fly a
-simulated year with things going wrong, and read why it worked or did not.
 
 What makes it different:
 
@@ -44,8 +37,6 @@ What makes it different:
 > first-order approximations with their assumptions stated; cost, schedule and launch-vehicle figures are game
 > models, not estimates for any real programme.
 
-<p align="center"><img src="docs/img/mission-success.jpg" alt="Mission success on the web client" width="88%"></p>
-
 ## Why speech and mixed reality
 
 We set out to build a simple game, and found that space engineering is not simple: a real mission is the balance of
@@ -54,6 +45,50 @@ players to tune battery figures until the numbers fit a prescribed answer; we wa
 not thought of. So you say what you are thinking, and the AI debates it with you and turns it into hardware you can
 see. Mixed reality is there for the same reason: with bare hands and a voice, a young student can hold a
 spacecraft, turn a planet and say an idea out loud.
+
+## The game in pictures
+
+### 1. A board of missions, and a new one every day
+<img src="docs/img/board.jpg" alt="The mission board" width="100%">
+
+Every card is a mission on Earth, the Moon or Mars, with its own place, science question and limits. A language model writes a new one each day; the built-in ones are always there. Each can be played at three levels: Cadet (hints come by themselves), Engineer (hints on request) and Chief (no hints, tight limits).
+
+### 2. One screen for the whole mission
+<img src="docs/img/mission-screen.jpg" alt="The mission screen: the problem on the left, the world and spacecraft in the middle, the parts shelf and launch vehicles on the right, the resource tiles below" width="100%">
+
+On the left, the problem and what the mission needs. In the middle, the world with the orbit and the target. On the right, the parts shelf and the launch vehicles. Along the bottom, ten live tiles for mass, power, budget, data, link and schedule: change one thing and every model that depends on it is recalculated.
+
+### 3. Say it, and the AI builds it
+<img src="docs/img/mixed-reality-say.jpg" alt="The player's AI in mixed reality, having heard: Add a camera that can see algae in the water" width="100%">
+
+The player taps their AI and speaks: "Add a camera that can see algae in the water." The AI works out what that means for this mission, builds the part in a test copy, checks it, and tells the player what it costs in mass, power and data.
+
+<img src="docs/img/mixed-reality-build.jpg" alt="The AI building the part onto the spacecraft with a beam" width="100%">
+
+Then the part is built onto the spacecraft in front of the player. Nothing in the game picks the answer: the player decides what to ask for, and several different designs can finish the same mission.
+
+### 4. The mission on your open hand
+<img src="docs/img/mixed-reality-palm.jpg" alt="The Earth and the spacecraft's orbit above the player's left palm" width="100%">
+
+On a Meta Quest 3, with bare hands: open the left palm and the mission rises above it, pinch to turn the world, touch the globe to point at a place. Close the hand and the desk is back. Mixed reality is here for access: a student who cannot read a link budget can still hold the spacecraft and say an idea out loud.
+
+<img src="docs/img/mixed-reality-systems.jpg" alt="The spacecraft taken apart in mixed reality, a part held between the fingers" width="100%">
+
+In the systems view the spacecraft comes apart: each part can be picked up, and its power, data and control lines are drawn.
+
+### 5. A crew that sees the same thing, at the same moment
+<img src="docs/img/web-sync.jpg" alt="The web client showing the change made in the headset, the objective it solved and the stars earned" width="100%">
+
+What the player in the headset did is on every teammate's screen at once: the change with their name, the objective it solved, the score. Where anyone points, with a finger or a mouse, everyone sees a mark in the same place.
+
+<img src="docs/img/crew-at-work.jpg" alt="Crew members' names on the parts they are working on, and the game chat" width="100%">
+
+Each crew member holds a role (power, communications, flight dynamics, payload) and answers for one priority. The game chat records who did what, and each objective is credited to whoever's change solved it. Empty seats can be filled by AI crewmates.
+
+### 6. Fly it, and learn why
+<img src="docs/img/mission-success.jpg" alt="Mission success, with the four conditions that held" width="100%">
+
+The flight is simulated day by day with seeded in-flight events. Four conditions with their evidence say whether it is a mission that works. The result is scored and ranked against other crews on the same mission, and kept as a record that the next crew's AI can draw on.
 
 ## A two-minute tour
 
