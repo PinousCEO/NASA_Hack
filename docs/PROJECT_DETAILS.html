@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Mission Forge — Project Details (copy from here)</title>
+<style>body{font-family:Segoe UI,Arial,sans-serif;max-width:860px;margin:30px auto;line-height:1.55;font-size:16px;color:#111}.how{background:#fff7d6;border:1px solid #e0c200;padding:10px 14px;margin-bottom:24px;font-size:14px}</style></head><body>
+<div class="how">이 노란 상자 아래의 글 전체를 마우스로 끌어 선택 → 복사(Ctrl+C) → 제출 페이지의 <b>Project Details</b> 칸에 붙여 넣기(Ctrl+V). 굵은 글씨와 목록이 그대로 들어갑니다. (이 상자는 복사하지 마세요.)</div>
+
+<p><b>Mission Forge is a space-mission design game for one to four players, on the web and in mixed reality.</b> Play it now, with a nickname only: https://mission-forge.onrender.com</p>
+
+<p><b>In one sentence:</b> you say what you want, an AI builds it onto your spacecraft while your crew watches, and the physics tells you what it cost.</p>
+
+<p><b>What you do in a mission</b></p>
+<ul>
+<li><b>Pick a mission.</b> A board of missions on Earth, the Moon and Mars, each with its own place drawn from NASA imagery and elevation data. An AI writes a new one every day. Three levels: Cadet, Engineer, Chief.</li>
+<li><b>Set your goal.</b> Your crew says what it is going for; that decides which science counts most.</li>
+<li><b>Build the spacecraft.</b> Tell your AI in your own words ("Add a camera that can see algae in the water") or take parts from the shelf. A part works only once its power, data and control lines are connected.</li>
+<li><b>Balance the resources.</b> Ten live tiles show mass, power, budget, data, link and schedule. Change one thing and everything that depends on it is recalculated, with one line saying why the number moved.</li>
+<li><b>Choose an orbit and a launch vehicle.</b> A design the rocket cannot lift to that orbit cannot fly.</li>
+<li><b>Fly it.</b> A year is simulated day by day, with events such as a solar storm or a failed battery cell. Four conditions say whether the mission works, and why.</li>
+<li><b>Try again, compare, compete.</b> Change the design and fly again, save and compare designs, and see where your crew ranks among crews on the same mission.</li>
+</ul>
+
+<p><b>What is new</b></p>
+<ul>
+<li><b>Say it, and it is built.</b> The AI is not an adviser beside the game; it is how you build. If the part you ask for is not in the catalogue, it designs one and assembles a 3D model for it.</li>
+<li><b>No single right answer.</b> Hints and AI answers lay out the options and what each costs. They never pick for you. Low power, low cost or bold: different designs finish the same mission.</li>
+<li><b>Mixed reality for access.</b> On a Meta Quest 3, with bare hands, the mission floats above your open palm. Turn the planet, point at a place, speak. A child who cannot read a link budget can still hold the spacecraft and say an idea out loud.</li>
+<li><b>A crew that sees each other.</b> Where anyone points, with a finger in the headset or a mouse on the web, everyone sees a mark at the same place. Each player holds a role with its own priority, and each objective is credited to whoever solved it.</li>
+<li><b>Nobody plays alone.</b> Empty seats can be filled by AI crewmates, so a solo student still meets the negotiation between roles.</li>
+<li><b>A game that grows.</b> Every crew's solution is saved, and the next crew's AI can draw on it.</li>
+</ul>
+
+<p><b>Why it matters</b></p>
+<p>Students rarely get to try a whole mission from idea to operation. Here one decision visibly moves everything else, in language a beginner can use, and a failed mission is explained instead of just scored.</p>
+
+<p><b>How it was built</b></p>
+<ul>
+<li><b>Server:</b> TypeScript on Node.js, holding the one authoritative state over HTTP and WebSocket.</li>
+<li><b>Client:</b> Next.js, React and Three.js; WebXR through the Immersive Web SDK. No app install on the headset.</li>
+<li><b>Engineering models:</b> orbit, eclipse, power, link budget, data, mass and launch capacity. They are deterministic and tested against reference values. Cost, schedule and launch-vehicle figures are game models and are labelled as such.</li>
+<li><b>AI, kept in check:</b> whatever the language model writes is treated as data. It is checked, built in a test copy, tested, and only then put into the shared mission.</li>
+<li><b>Tested:</b> 159 automated tests and 51 browser checks; mixed reality tried on a real Quest 3.</li>
+</ul>
+
+<p><b>Limits</b></p>
+<p>All missions are orbiters with an optional rover. The flight is simulated and shown as a result, not played through. The interface is in English.</p>
+</body></html>

@@ -197,7 +197,7 @@ directly in the shared mission.
 
 ## Technical overview
 
-A public instance runs at https://mission-forge.onrender.com (without a language-model key: the parts shelf, wiring, flight, scoring, collaboration and AI crewmates work; free-form requests to the AI are limited to a few known sentences). The whole game, server included, is in this repository and also runs on one machine with the three commands above.
+A public instance runs at https://mission-forge.onrender.com (the conversational builder and the daily missions need the language-model key to be set on the host; without it the parts shelf, wiring, flight, scoring, collaboration and AI crewmates still work). The whole game, server included, is in this repository and also runs on one machine with the three commands above.
 
 ```mermaid
 flowchart LR
