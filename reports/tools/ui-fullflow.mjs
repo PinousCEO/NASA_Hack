@@ -8,6 +8,10 @@ import path from "node:path";
 const require = createRequire(path.resolve("package.json"));
 const { chromium } = require("playwright-core");
 const BASE = process.env.BASE ?? "http://127.0.0.1:8787";
+// --no-model: the server has no language model. Everything a player does by clicking is done the same way;
+// the two steps that need the model (control logic written from a sentence, an idea judged) are replaced by
+// a control logic installed as a crew edit and a question the built-in analyser can answer. No model request is made.
+const noModel = process.argv.includes("--no-model");
 const out = path.resolve("reports/evidence/ui");
 fs.mkdirSync(out, { recursive: true });
 const lines = [];
@@ -23,13 +27,14 @@ page.on("dialog", (d) => void d.accept());
 await page.goto(`${BASE}/api/health`);
 const post = (route, body) => page.evaluate(([r, b]) => fetch(r, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify(b ?? {}) }).then(async (x) => ({ status: x.status, body: await x.json().catch(() => null) })), [route, body]);
 const get = (route) => page.evaluate((r) => fetch(r, { credentials: "include" }).then((x) => x.json()), route);
-const creds = { username: "flowpilot", password: "full-flow-check-password-1", displayName: "Flow Pilot" };
+const creds = { username: noModel ? "flowpilotlocal" : "flowpilot", password: "full-flow-check-password-1", displayName: "Flow Pilot" };
 if ((await post("/api/auth/register", creds)).status >= 300) await post("/api/auth/login", creds);
 const sid = (await post("/api/sessions", { scenarioId: "lunar-volatiles", difficulty: "cadet", seed: 5, name: "Evidence full flow" })).body.session.id;
 say(`# UI run: one mission from first screen to debrief — ${new Date().toISOString()} — session ${sid}`);
 const snap = () => get(`/api/sessions/${sid}`);
 const tab = (name) => page.locator(".right .tabs .tab", { hasText: new RegExp(`^${name}`, "i") }).click();
-const shot = (name) => page.screenshot({ path: path.join(out, name) });
+// the pictures of the live run are evidence in the report: a run without the model does not overwrite them
+const shot = (name) => (noModel ? Promise.resolve() : page.screenshot({ path: path.join(out, name) }));
 
 // First screen, with the walkthrough a newcomer gets.
 await page.goto(`${BASE}/mission?s=${sid}&intro=0`, { waitUntil: "domcontentloaded" });
@@ -88,21 +93,34 @@ const ask = async (text, timeout = 200000) => {
   await page.waitForTimeout(800);
   return r;
 };
-const r1 = await ask("When power runs short, run the instruments at a quarter of their normal time, and return to normal once the battery is nearly full again. Also send the hydrogen data down first.");
-if (r1?.status === "awaiting_approval") { await page.locator(".chat .turn").first().getByRole("button", { name: /Approve & deploy|Add it anyway/ }).click(); await page.waitForTimeout(2500); }
+let r1 = null;
+if (noModel) {
+  const ctl = { id: "ctl-flow", name: "Power saver", description: "Runs the instruments a quarter of the time when power is short.", hostId: "bus", memory: { saving: 0 }, rules: [{ when: "power.marginW < 0 or battery.soc < 0.6", do: [{ target: "mem:saving", value: "1" }] }, { when: "battery.soc > 0.9 and power.marginW >= 0", do: [{ target: "mem:saving", value: "0" }] }, { when: "mem.saving == 1", do: [{ target: "instruments", value: "nominal * 0.25" }], note: "saving power" }], origin: { kind: "user_authored" } };
+  await page.evaluate((c) => window.__collabEdit([{ op: "append", path: "systems.controllers", value: c }], "Install Power saver"), ctl);
+  await page.waitForFunction(() => window.__workspace.scene.mission.config.systems.controllers.length === 1, null, { timeout: 20000 }).catch(() => null);
+} else {
+  r1 = await ask("When power runs short, run the instruments at a quarter of their normal time, and return to normal once the battery is nearly full again. Also send the hydrogen data down first.");
+  if (r1?.status === "awaiting_approval") { await page.locator(".chat .turn").first().getByRole("button", { name: /Approve & deploy|Add it anyway/ }).click(); await page.waitForTimeout(2500); }
+}
 s = await snap();
-check("the AI wrote control logic from one sentence and it is in the design", s.mission.config.systems.controllers.length === 1, `${r1?.answer?.verdict}: ${r1?.answer?.text}`);
+check(noModel ? "control logic is in the design (installed as a crew edit: no model in this run)" : "the AI wrote control logic from one sentence and it is in the design", s.mission.config.systems.controllers.length === 1, noModel ? s.mission.config.systems.controllers[0]?.name : `${r1?.answer?.verdict}: ${r1?.answer?.text}`);
 await shot("32-ai-built-controller.png");
 
-// An idea that does not hold.
-const r2 = await ask("If we painted the solar array black, would the radio link margin improve?");
-check("an idea that does not hold is labelled so, with the reason, and nothing is built", ["refuted", "outside_model", "explained", "cannot"].includes(r2?.answer?.verdict) && !r2?.proposalId && (await snap()).mission.version === s.mission.version, `${r2?.answer?.verdict}: ${r2?.answer?.text}`);
-await page.locator(".chat .seg.thin button", { hasText: "Did not hold" }).click();
-await page.waitForTimeout(500);
-const kept = await page.locator(".chat .turn").count();
-check("it is kept under 'Did not hold' with its reason, and can be shared with the crew", r2?.answer?.verdict === "refuted" ? kept === 1 && (await page.locator(".chat .turn .foot button", { hasText: "Share with crew" }).count()) === 1 : true, `verdict ${r2?.answer?.verdict}, ${kept} kept`);
-await shot("33-idea-did-not-hold.png");
-await page.locator(".chat .seg.thin button", { hasText: "Everything" }).click();
+if (noModel) {
+  // A question typed into the AI panel is answered from the engineering models and changes nothing.
+  const r2 = await ask("compute the link budget", 60000);
+  check("a question typed into the AI panel is answered from the engineering models and changes nothing", /margin/i.test(r2?.answer?.text ?? "") && !r2?.proposalId && (await snap()).mission.version === s.mission.version, r2?.answer?.text);
+} else {
+  // An idea that does not hold.
+  const r2 = await ask("If we painted the solar array black, would the radio link margin improve?");
+  check("an idea that does not hold is labelled so, with the reason, and nothing is built", ["refuted", "outside_model", "explained", "cannot"].includes(r2?.answer?.verdict) && !r2?.proposalId && (await snap()).mission.version === s.mission.version, `${r2?.answer?.verdict}: ${r2?.answer?.text}`);
+  await page.locator(".chat .seg.thin button", { hasText: "Did not hold" }).click();
+  await page.waitForTimeout(500);
+  const kept = await page.locator(".chat .turn").count();
+  check("it is kept under 'Did not hold' with its reason, and can be shared with the crew", r2?.answer?.verdict === "refuted" ? kept === 1 && (await page.locator(".chat .turn .foot button", { hasText: "Share with crew" }).count()) === 1 : true, `verdict ${r2?.answer?.verdict}, ${kept} kept`);
+  await shot("33-idea-did-not-hold.png");
+  await page.locator(".chat .seg.thin button", { hasText: "Everything" }).click();
+}
 
 // Launch vehicle, from the kit's controls.
 await page.locator(".kit-tabs button", { hasText: "Controls" }).click();
@@ -169,6 +187,6 @@ const debrief = await page.locator(".modal").innerText().catch(() => "");
 check("the debrief opens with whether the mission worked, then the score", /Does the mission work/i.test(debrief) && debrief.indexOf("Does the mission work") < debrief.search(/\b[SABCD]\b\s*\n|objectives|OBJECTIVES/), debrief.slice(0, 260));
 await shot("36-debrief-outcome-first.png");
 check("no page or console errors during the whole flow", problems.length === 0, problems.join(" || "));
-fs.writeFileSync(path.resolve("reports/evidence/ui-fullflow.md"), lines.join("\n") + "\n");
-await browser.close();
+fs.writeFileSync(path.resolve(noModel ? "reports/evidence/ui-fullflow-no-model.md" : "reports/evidence/ui-fullflow.md"), lines.join("\n") + "\n");
+await Promise.race([browser.close(), new Promise((r) => setTimeout(r, 8000))]); // closing a headless browser can hang while another Edge is open
 process.exit(lines.some((l) => l.startsWith("FAIL")) ? 1 : 0);

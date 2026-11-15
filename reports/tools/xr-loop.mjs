@@ -54,7 +54,7 @@ await wait(1500);
 const instId = await mr.page.evaluate(() => window.__workspace.scene.mission.config.spacecraft.components.find((c) => c.type === "instrument").id);
 const hud1 = await mr.page.evaluate(() => ({ status: window.__workspace.debug.status(), quick: window.__workspace.debug.quick(), lines: window.__workspace.scene.lineCount, hasObject: window.__workspace.scene.componentObjects.has(window.__workspace.scene.mission.config.spacecraft.components.find((c) => c.type === "instrument").id) }));
 check("Web → MR: the part added on the web is an object in the headset's scene", hud1.hasObject);
-check("the headset's status panel says a part is not connected, and offers to connect it", /not fully connected/.test(hud1.status.find((l) => l.k === "Wiring")?.v ?? "") && /^Connect /.test(hud1.quick[0] ?? ""), `${JSON.stringify(hud1.status.slice(0, 4))} · quick: ${hud1.quick.join(" | ")}`);
+check("the headset's status panel says a part is not connected, and offers to connect it", /not connected/.test(hud1.status.find((l) => l.k === "Wiring")?.v ?? "") && /^Connect /.test(hud1.quick[0] ?? ""), `${JSON.stringify(hud1.status.slice(0, 4))} · quick: ${hud1.quick.join(" | ")}`);
 check("no line is drawn to the unconnected part (drawn lines = real lines)", hud1.lines === linesBefore, `${linesBefore} → ${hud1.lines}`);
 
 // MR → Web: the headset's quick command connects it; the web sees the three lines and the goal turn on.
@@ -95,8 +95,11 @@ check("MR → Web: time turned in the headset is the same moment on the web", Ma
 check("the web player's own view did not move when the headset player acted", Math.hypot(camWeb0[0] - camWeb1[0], camWeb0[1] - camWeb1[1], camWeb0[2] - camWeb1[2]) < 1e-6);
 await web.page.screenshot({ path: path.join(out, "20-web-after-mr-actions.png") });
 await mr.page.screenshot({ path: path.join(out, "21-mr-emulator-view.png") });
+// The page itself shows only the "session active" card; this is the frame drawn for the (emulated) headset.
+const frameUrl = await Promise.race([mr.page.evaluate(() => window.__workspace.debug.capture()).catch(() => null), new Promise((r) => setTimeout(() => r(null), 8000))]);
+if (frameUrl) fs.writeFileSync(path.join(out, "22-mr-headset-frame.jpg"), Buffer.from(frameUrl.split(",")[1], "base64"));
 say(`page errors: ${problems.length ? problems.join(" || ") : "none"}`);
 say("verification level: WebXR emulator (IWER) in desktop Edge. Not verified: a physical headset (tracking, passthrough, hand input, performance, comfort).");
 fs.writeFileSync(path.resolve("reports/evidence/xr-loop.md"), lines.join("\n") + "\n");
-await browser.close();
+await Promise.race([browser.close(), new Promise((r) => setTimeout(r, 8000))]); // closing a headless browser can hang while another Edge is open
 process.exit(lines.some((l) => l.startsWith("FAIL")) ? 1 : 0);

@@ -9,11 +9,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MissionClock } from "@/components/MissionClock";
 import { AiQueue, Coach, EXPLAIN, Tutorial, Viewfinder } from "@/components/MissionExtras";
 import { DefineMission, DesignsPanel } from "@/components/MissionGame";
+import { hintFor, QuestBar } from "@/components/MissionQuest";
+import { type CrewEvent, CrewFeed } from "@/components/MissionCrew";
 import { AiPanel, AnalysisPanel, type Ctx, DesignPanel, EvaluationDashboard, LogPanel, ObjectivesPanel, ReviewPanel } from "@/components/MissionPanels";
 import { go as navigate, type Account, api, currentAccount, type Evaluation, fmt, type Presence, type Snapshot } from "@/lib/api";
 import { bus } from "@/lib/bus";
 import { Collab } from "@/lib/collab";
 import type { ViewMode } from "@/lib/scene/MissionScene";
+import { type SiteKind, siteKindFor } from "@/lib/scene/site";
 import type { SpatialStatus, Workspace, XrSupport } from "@/lib/xr/workspace";
 
 const PHASES = ["concept", "trade", "design", "review", "submitted"];
@@ -21,6 +24,23 @@ type Toast = { id: number; message: string; tone: string; out?: boolean };
 type Tab = "design" | "ai" | "analysis" | "designs" | "review" | "log" | "systems";
 
 /** Headline metrics, each tied to the engineering model that produces it (so it can pulse when recalculated). */
+/**
+ * Put this mission's own place into the scene: its mark on the world, and beside the world a model of the kind of
+ * ground it is (dunes, a shadowed crater, fire fronts…) with what the design's camera can tell apart there against
+ * what the problem needs to see.
+ */
+function showPlace(ws: Workspace, snap: Snapshot): void {
+  const brief = snap.session.brief;
+  const world = snap.session.world;
+  const target = world?.target;
+  ws.scene.setPing("target", target ? [target.latDeg, target.lonDeg] : null, "#ffb020", target ? `Target · ${target.name}` : "", "this mission's place (approx.)");
+  const words = brief ? `${brief.title} ${brief.problem}` : `${snap.scenario.title} ${snap.scenario.tagline}`;
+  const sharp = ((snap.scenario as any).objectives ?? []).find((o: any) => o.category === "science" && o.metric?.field === "bestImagingResolutionM");
+  const need = sharp ? (snap.evaluation.objectives as any[]).find((o) => o.id === sharp.id)?.target ?? null : null;
+  const now = (snap.mission.derived["science.return"]?.value as any)?.bestImagingResolutionM ?? null;
+  ws.scene.setSite({ kind: (world?.site as SiteKind | undefined) ?? siteKindFor(words), name: target?.name ?? brief?.title ?? snap.scenario.title, nowM: typeof now === "number" ? now : null, needM: typeof need === "number" ? need : null });
+}
+
 function metrics(snap: Snapshot): { node: string; k: string; v: string; u: string; tone?: string }[] {
   const d = (id: string): any => snap.mission.derived[id]?.value ?? {};
   const bad = (cond: boolean): string | undefined => (cond ? "bad" : undefined);
@@ -30,7 +50,7 @@ function metrics(snap: Snapshot): { node: string; k: string; v: string; u: strin
   return [
     { node: "orbit.elements", k: "Altitude", v: fmt(el.periapsisAltitudeKm), u: "km" },
     { node: "orbit.elements", k: "Period", v: fmt(el.periodS / 60), u: "min" },
-    { node: "orbit.eclipse", k: "Eclipse", v: fmt(ecl.eclipseFraction * 100), u: `% · β ${fmt(ecl.betaDeg)}°` },
+    { node: "orbit.eclipse", k: "Eclipse", v: fmt(ecl.eclipseFraction * 100), u: "%" },
     { node: "power.budget", k: "Power margin", v: fmt(pw.marginW), u: "W", tone: bad(pw.marginW < 0) },
     { node: "power.budget", k: "Battery DoD", v: pw.depthOfDischarge === null ? "–" : fmt(pw.depthOfDischarge * 100), u: "%", tone: bad(!pw.batteryAdequate) },
     { node: "comms.link", k: "Link margin", v: fmt(link.worstMarginDb), u: "dB", tone: bad(link.worstMarginDb !== null && link.worstMarginDb < 0) },
@@ -54,6 +74,9 @@ export default function MissionPage() {
   const [tab, setTab] = useState<Tab>("ai");
   const [mode, setMode] = useState<ViewMode>("orbit");
   const [selected, setSelected] = useState<string | null>(null);
+  // The headset callbacks are created once; they read the current selection through this.
+  const selectedRef = useRef<string | null>(null);
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [pulsed, setPulsed] = useState<{ nodes: string[]; key: number }>({ nodes: [], key: 0 });
   const [previewDay, setPreviewDayState] = useState<number | null>(null);
@@ -72,6 +95,16 @@ export default function MissionPage() {
   const workspace = useRef<Workspace | null>(null);
   const snapRef = useRef<Snapshot | null>(null);
   const youRef = useRef<any>(null);
+  const lastSaid = useRef<{ who: string; text: string; at: number } | null>(null);
+  const [saidTick, setSaidTick] = useState(0);
+  const pointing = useRef(new Set<string>());
+  // AI crewmates in this mission (software players the lead brought in).
+  const [aiCrew, setAiCrew] = useState<{ here: boolean; busy: boolean }>({ here: false, busy: false });
+  // What the crew has been doing, newest last: shown beside the stage and (the latest message) in the headset.
+  const [feed, setFeed] = useState<CrewEvent[]>([]);
+  const note = useCallback((e: Omit<CrewEvent, "id" | "at"> & { id?: string; at?: number }): void => setFeed((list) => (e.id && list.some((x) => x.id === e.id) ? list : [...list, { id: e.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, at: e.at ?? Date.now(), ...e }].sort((a, b) => a.at - b.at).slice(-60))), []);
+  const colorOf = (accountId: string | undefined): string => presenceRef.current.find((p) => p.accountId === accountId)?.color ?? "#9fb0d0";
+  const presenceRef = useRef<Presence[]>([]);
   const toastId = useRef(0);
   snapRef.current = snap;
   youRef.current = you;
@@ -86,7 +119,7 @@ export default function MissionPage() {
   const reloadLists = useCallback(() => {
     const id = collab.current?.sessionId;
     if (!id) return;
-    void api("GET", `/api/sessions/${id}/requests`).then((r) => setRequests(r.slice(0, 20))).catch(() => undefined);
+    void api("GET", `/api/sessions/${id}/requests`).then((r) => setRequests(r.slice(0, 80))).catch(() => undefined);
     void api("GET", `/api/sessions/${id}/proposals`).then(setProposals).catch(() => undefined);
   }, []);
 
@@ -138,26 +171,43 @@ export default function MissionPage() {
           if (s.resumed && s.missed.length) toast(`Reconnected. While you were away: ${s.missed.map((m: any) => `${m.by} — ${m.note}`).slice(-3).join("; ")}`, "info");
         },
         version: (u) => {
-          setSnap((prev) => prev && { ...prev, mission: u.mission, checks: u.checks, evaluation: u.evaluation, maturity: u.maturity, versions: [...prev.versions, { version: u.mission.version, note: u.mission.note, publishedBy: u.mission.publishedBy, publishedAt: u.mission.publishedAt, recalculated: u.mission.recalculated }].slice(-40) });
+          // A change that breaks the priority of a role someone holds is said out loud: that is where a crew has to talk.
+          for (const w of u.roles ?? []) {
+            const was = snapRef.current?.roles?.find((x) => x.seat === w.seat);
+            if (w.holder && was?.ok && !w.ok) note({ who: w.seat, color: "#ffd166", kind: "did", text: `priority no longer holds: ${w.label} (${w.detail}) after ${u.cause.by === acc.id ? "your" : `${u.cause.displayName}'s`} change: ${u.cause.summary}` });
+          }
+          setSnap((prev) => prev && { ...prev, mission: u.mission, checks: u.checks, evaluation: u.evaluation, maturity: u.maturity, roles: u.roles ?? prev.roles, versions: [...prev.versions, { version: u.mission.version, note: u.mission.note, publishedBy: u.mission.publishedBy, publishedAt: u.mission.publishedAt, recalculated: u.mission.recalculated }].slice(-40) });
           setPulsed({ nodes: u.mission.recalculated, key: u.mission.version });
           workspace.current?.scene.pulse();
           const mine = u.cause.by === acc.id;
+          note({ id: `v${u.mission.version}`, who: mine ? "You" : u.cause.displayName, color: colorOf(u.cause.by), kind: "did", text: u.cause.summary });
           toast(`${mine ? "You" : u.cause.displayName} · ${u.cause.summary} — ${u.mission.recalculated.length} model${u.mission.recalculated.length === 1 ? "" : "s"} recalculated`, mine ? "ok" : "info");
         },
-        game: (u) => setSnap((prev) => prev && { ...prev, game: u.game, evaluation: u.evaluation, maturity: u.maturity }),
+        game: (u) => setSnap((prev) => prev && { ...prev, game: u.game, evaluation: u.evaluation, maturity: u.maturity, roles: u.roles ?? prev.roles }),
         members: (members) => {
           setSnap((prev) => prev && { ...prev, session: { ...prev.session, members } });
           const me = members.find((m: any) => m.accountId === acc.id);
           if (me) setYou((prev: any) => ({ ...prev, ...me }));
         },
         presence: setPresence,
-        presenceUpdate: (p) => setPresence((list) => (list.some((x) => x.clientId === p.clientId) ? list.map((x) => (x.clientId === p.clientId ? { ...x, ...p } : x)) : [...list, p])),
+        presenceUpdate: (p) => {
+          // A crewmate started pointing at a place: say so once, the mark itself is on the world.
+          if (p.point && !pointing.current.has(p.clientId)) { pointing.current.add(p.clientId); note({ who: p.displayName, color: p.color, kind: "points", text: `is pointing at ${Math.abs(p.point[0]!).toFixed(1)}°${p.point[0]! >= 0 ? "N" : "S"} ${Math.abs(p.point[1]!).toFixed(1)}°${p.point[1]! >= 0 ? "E" : "W"}` }); toast(`${p.displayName} is pointing at a place on the ${snapRef.current?.mission.config.centralBody ?? "world"}: look for their mark in the Orbit view.`, "info"); }
+          if (p.point === null) pointing.current.delete(p.clientId);
+          setPresence((list) => (list.some((x) => x.clientId === p.clientId) ? list.map((x) => (x.clientId === p.clientId ? { ...x, ...p } : x)) : [...list, p]));
+        },
+        say: (m) => {
+          const mine = m.accountId === acc.id;
+          note({ id: `m${m.id}`, at: m.at, who: mine ? "You" : m.displayName, color: m.color, kind: "said", text: m.text });
+          if (!mine && Date.now() - m.at < 15000) { toast(`${m.displayName}: ${m.text}`, "info"); lastSaid.current = { who: m.displayName, text: m.text, at: m.at }; setSaidTick((n) => n + 1); }
+        },
         locks: (locks) => setSnap((prev) => prev && { ...prev, locks }),
         request: (r) => {
-          setRequests((list) => [r, ...list.filter((x) => x.id !== r.id)].slice(0, 20));
+          setRequests((list) => [r, ...list.filter((x) => x.id !== r.id)].sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? ""))).slice(0, 80));
           // Everyone sees when a teammate puts something to the AI.
           if (!seenRequests.current.has(r.id)) {
             seenRequests.current.add(r.id);
+            if (!r.action) note({ id: `r${r.id}`, who: r.user?.id === acc.id ? "You" : (first.session.members.find((m: any) => m.accountId === r.user?.id)?.displayName ?? "A teammate"), color: colorOf(r.user?.id), kind: "asked", text: r.private && r.user?.id !== acc.id ? "(a private question)" : String(r.text ?? "").slice(0, 110) });
             if (r.user?.id !== acc.id) toast(`${first.session.members.find((m: any) => m.accountId === r.user?.id)?.displayName ?? "A teammate"} asked the AI: ${String(r.text).slice(0, 90)}`, "info");
           }
         },
@@ -195,12 +245,22 @@ export default function MissionPage() {
         onXrChange: (active, m) => setXr((x) => ({ ...x, active, mode: m })),
         notify: toast,
         onClock: (k) => collab.current?.clock(k.timeMs, k.rate),
+        me: () => ({ name: account?.displayName ?? "You", color: youRef.current?.color ?? "#4cc9f0" }),
+        // What the player said into the headset's microphone, as text (the server asks the speech model).
+        transcribe: async (audio: Blob) => {
+          const bytes = new Uint8Array(await audio.arrayBuffer());
+          let binary = "";
+          for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+          const r = await api<{ text: string }>("POST", "/api/transcribe", { audio: btoa(binary), mime: audio.type || "audio/webm" });
+          return r.text;
+        },
         onAction: (a) => {
           const id = collab.current?.sessionId;
           if (!id) return;
           const run = (p: Promise<unknown>): void => void p.then(reloadLists).catch((e) => toast(e.message, "warn"));
           if (a.type === "simulate") run(api("POST", `/api/sessions/${id}/simulate`, {}));
-          else if (a.type === "request") run(api("POST", `/api/sessions/${id}/requests`, { text: a.text }));
+          else if (a.type === "say") collab.current?.say(a.text);
+          else if (a.type === "request") run(api("POST", `/api/sessions/${id}/requests`, { text: a.text, ...(selectedRef.current ? { topic: selectedRef.current } : {}) })); // a question asked in the headset goes to the thread of the part that is selected
           else if (a.type === "catalog") run(api("POST", `/api/sessions/${id}/catalog`, { itemId: a.itemId }));
           else if (a.type === "connect") run(api("POST", `/api/sessions/${id}/connect`, { componentId: a.componentId }));
           else run(api("POST", `/api/sessions/${id}/proposals/${a.proposalId}/${a.approve ? "approve" : "reject"}`, { reason: a.approve ? "Approved in XR" : "Rejected in XR" }));
@@ -212,6 +272,7 @@ export default function MissionPage() {
       (window as any).__collabEdit = (patches: any[], summary: string) => collab.current?.edit(patches, summary);
       (window as any).__select = (id: string | null) => setSelected(id);
       ws.scene.setMission(snapRef.current!.mission);
+      showPlace(ws, snapRef.current!);
       if (arrivalClock.current) ws.scene.setClock(arrivalClock.current.timeMs, arrivalClock.current.rate);
       ws.refresh();
       setXr((x) => ({ ...x, support: ws.support }));
@@ -241,6 +302,7 @@ export default function MissionPage() {
     const ws = workspace.current;
     if (!ws || !snap) return;
     ws.scene.setMission(snap.mission);
+    showPlace(ws, snap);
     ws.refresh();
   }, [snap?.mission.version]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { workspace.current?.scene.setPresence(presence, presence.find((p) => p.accountId === account?.id && p.mode === (xr.active ? "xr" : "desktop"))?.clientId ?? null); }, [presence, account, xr.active]);
@@ -256,7 +318,8 @@ export default function MissionPage() {
     const ws = workspace.current;
     if (!ws || !snap) return;
     const pending = proposals.find((p) => p.status === "awaiting_approval");
-    const mine = requests.find((r) => !r.private && r.user?.id === account?.id);
+    // The latest reply of your own AI, from the thread of the part you have selected (or the mission thread).
+    const mine = requests.find((r) => !r.private && !r.action && r.user?.id === account?.id && (r.topic ?? null) === selected) ?? requests.find((r) => !r.private && !r.action && r.user?.id === account?.id);
     // The headset shows the same things as the desktop, in the same order: does the mission work, what is not connected,
     // what the control logic is, then the numbers. Its quick commands follow the state of the design.
     const wiring = snap.mission.derived["systems.wiring"]?.value as any;
@@ -278,23 +341,45 @@ export default function MissionPage() {
       lines: [
         { k: "Mission", v: outcome ? ({ not_ready: "not ready to fly", ready_to_fly: "ready to fly", success: "SUCCESS", partial: "partial success", failed: "FAILED in flight" } as Record<string, string>)[outcome.verdict]! : "–", tone: (outcome && ["not_ready", "failed"].includes(outcome.verdict) ? "bad" : "ok") as "ok" | "bad" },
         { k: "Open", v: outcome?.conditions.find((k) => k.met === false)?.title ?? outcome?.conditions.find((k) => k.met === null)?.evidence ?? "nothing" },
-        { k: "Wiring", v: wiring?.wired ? `${wiring.links.length} lines · ${loose.length ? `${loose.length} part(s) not fully connected` : "all connected"}` : "–", tone: (loose.length ? "bad" : "ok") as "ok" | "bad" },
+        { k: "Wiring", v: wiring?.wired ? `${wiring.links.length} lines · ${loose.length ? `${loose.length} part${loose.length === 1 ? "" : "s"} not connected` : "all connected"}` : "–", tone: (loose.length ? "bad" : "ok") as "ok" | "bad" },
         { k: "Control", v: controllers.length ? controllers.map((k) => `${k.name}${k.enabled ? "" : " (off)"}`).join(", ").slice(0, 60) : "no control logic yet" },
         ...tiles.filter((t) => ["Power margin", "Link margin", "Data return"].includes(t.k)).map((t) => ({ k: t.k, v: `${t.v} ${t.u}`, tone: (t.tone ?? "ok") as "ok" | "bad" })),
       ],
+      // At Cadet level the probe offers the hint itself, in the headset as on the screen.
+      crew: lastSaid.current,
+      target: snap.session.world?.target?.name ?? "",
+      hint: snap.session.difficulty === "cadet" ? ((h) => (h ? `${h.about} ${h.ways[0] ?? ""}` : ""))(hintFor(snap)) : "",
       footer: `${snap.evaluation.score.toFixed(0)} pts · v${snap.mission.version} · ${presence.length} participant${presence.length === 1 ? "" : "s"} · ${snap.checks.filter((c) => c.status === "fail").length} constraint(s) violated`,
       quick,
+      ai: mine ? { thread: part && (mine.topic ?? null) === selected ? part.name : "the mission", question: String(mine.text ?? ""), answer: String(mine.answer?.text ?? ""), state: String(mine.status ?? "working").replace(/_/g, " ") } : null,
       pending: pending ? { proposalId: pending.id, summary: requests.find((r) => r.proposalId === pending.id)?.summary ?? requests.find((r) => r.proposalId === pending.id)?.text ?? "change", canApprove: you?.role === "lead" || (you?.role === "engineer" && pending.requiredRole === "engineer") } : null,
       // A selected part speaks first: what it is and what its lines deliver. Otherwise the player's own AI's latest reply.
       activity: part
         ? `${part.name}: ${partStatus?.notes.length ? partStatus.notes.join(" ") : `fully connected${partStatus?.commandable ? ", commandable by control logic" : ""}`} · ${(snap.mission.config.systems?.links ?? []).filter((l: any) => l.from.node === part.id || l.to.node === part.id).map((l: any) => `${l.kind}${l.rating ? ` ${l.rating}${l.kind === "power" ? " W" : " bit/s"}` : ""}`).join(", ") || "no lines"}`
-        : mine ? (mine.answer?.text ? `AI: ${String(mine.answer.text).slice(0, 260)}` : `${mine.text} — ${String(mine.status).replace(/_/g, " ")}`) : "Carry the ring's handle to turn time, grab a slider or a part, or ask the AI with a quick command.",
+        : mine ? (mine.answer?.text ? "Your AI's reply is on the panel above the table. Carry the ring's handle to turn time, or grab a slider or a part." : `${mine.text} — ${String(mine.status).replace(/_/g, " ")}`) : "Carry the ring's handle to turn time, grab a slider or a part, or ask the AI with a quick command.",
     };
     ws.setSpatialStatus(status);
-  }, [snap, tiles, proposals, requests, presence, you, previewDay, selected, account]);
+    // `xr` is a dependency so this runs once the 3D workspace exists (it is created after the first snapshot
+    // arrives) and again when a session starts: a solo player who changes nothing still gets filled panels.
+  }, [snap, tiles, proposals, requests, presence, you, previewDay, selected, account, xr, saidTick]);
 
   if (error) return <div className="page center" style={{ minHeight: "100vh" }}><div className="glass card" style={{ maxWidth: 420 }}><h2>Cannot open this mission</h2><p className="dim" style={{ margin: "10px 0" }}>{error}</p><a className="btn" href="/lobby">Back to missions</a></div></div>;
 
+  presenceRef.current = presence;
+  // A mission just started from the board or the lobby begins with its goal: what is this crew going for? (After the
+  // first-visit walkthrough, if that is showing. It can be closed and set later from the strip above the stage.)
+  const askedGoal = useRef(false);
+  useEffect(() => {
+    if (askedGoal.current || !snap || !you || typeof window === "undefined") return;
+    if (new URLSearchParams(window.location.search).get("new") !== "1") return;
+    if (snap.game.charter || snap.session.mode === "sandbox" || snap.game.submitted || you.role !== "lead") return;
+    const timer = setInterval(() => {
+      if (document.querySelector(".tutorial")) return;
+      clearInterval(timer);
+      if (!askedGoal.current) { askedGoal.current = true; setDefining(true); }
+    }, 600);
+    return () => clearInterval(timer);
+  }, [snap, you]);
   const ctx: Ctx | null = snap && collab.current && account && sid ? { sid, snap, collab: collab.current, role: you?.role ?? "viewer", accountId: account.id, presence, requests, proposals, selected, setSelected, toast, setPreviewDay, reloadLists } : null;
   const phaseIndex = snap ? PHASES.indexOf(snap.game.phase) : 0;
   const support = xr.support;
@@ -329,17 +414,22 @@ export default function MissionPage() {
           <aside className="glass left"><ObjectivesPanel c={ctx} onDefine={() => setDefining(true)} openTab={(t) => setTab(t as Tab)} /></aside>
           <div className="mid">
             <Viewfinder snap={snap} mode={mode} />
-            <AiQueue requests={requests} members={snap.session.members} onOpen={() => setTab("ai")} />
+            {/* One overlay at a time on the stage: a selected part's card takes the place of the crew queue and the coach strip. */}
             <Tutorial />
-            {selected && (() => {
-              const part = snap.mission.config.spacecraft.components.find((x: any) => x.id === selected);
-              if (!part) return null;
-              return <PartCard c={ctx} part={part} onClose={() => setSelected(null)} onAdjust={() => setTab("design")} />;
-            })()}
+            {/* The game over the engineering: stars, the objectives that tick off, hints at the easier levels. */}
+            <CrewFeed events={feed} presence={presence} seats={4} selfId={account?.id ?? ""} roles={Object.fromEntries(Object.entries((snap.game.roleClaims ?? {}) as Record<string, string>).map(([seat, id]) => [id, seat]))}
+              watches={snap.roles ?? []} names={Object.fromEntries(snap.session.members.map((m: any) => [m.accountId, m.displayName]))} canTake={you?.role !== "viewer" && !snap.game.submitted}
+              ai={{ canAsk: you?.role === "lead" && !snap.game.submitted, here: aiCrew.here, busy: aiCrew.busy,
+                onBring: () => { setAiCrew({ here: false, busy: true }); void api<{ crewmates: string[] }>("POST", `/api/sessions/${sid}/crewmates`, { count: 3 }).then((r) => { setAiCrew({ here: r.crewmates.length > 0, busy: false }); toast(r.crewmates.length ? `${r.crewmates.join(", ")} joined your crew.` : "There is no free seat for an AI crewmate.", "info"); }).catch((err) => { setAiCrew({ here: false, busy: false }); toast((err as Error).message, "warn"); }); },
+                onDismiss: () => { setAiCrew({ here: true, busy: true }); void api("DELETE", `/api/sessions/${sid}/crewmates`).then(() => setAiCrew({ here: false, busy: false })).catch(() => setAiCrew({ here: true, busy: false })); } }}
+              onTake={(seat) => void api("POST", `/api/sessions/${sid}/role`, { seat }).catch((err) => toast((err as Error).message, "warn"))}
+              waiting={(() => { const p = proposals.find((x) => x.status === "awaiting_approval"); if (!p) return null; const r = requests.find((x) => x.proposalId === p.id); return { summary: String(r?.summary ?? r?.text ?? "a change").slice(0, 90), by: snap.session.members.find((m: any) => m.accountId === r?.user?.id)?.displayName ?? "a crew member" }; })()}
+              onSay={(t) => collab.current?.say(t)} onOpenWaiting={() => setTab("ai")} />
+            <QuestBar goal={snap.session.mode === "sandbox" ? "none" : snap.game.charter ? "set" : "open"} onDefine={() => setDefining(true)} snap={snap} onAsk={(text) => { setSelected(null); setTab("ai"); setTimeout(() => bus.send("ask", text), 0); }} />
             <button className="btn sm ghost" style={{ position: "absolute", left: 8, top: 8, pointerEvents: "auto" }} onClick={() => setCollapsed(!collapsed)}>{collapsed ? "▸ Objectives" : "◂"}</button>
             {mode === "orbit" && <button className={`btn sm ${chase ? "primary" : ""}`} style={{ position: "absolute", right: 8, top: 40, pointerEvents: "auto" }} title="Fly the camera alongside the spacecraft" onClick={() => { const next = !chase; setChase(next); if (next) setEarthView(false); workspace.current?.follow(next); }}>{chase ? "◉ Craft cam" : "Craft cam"}</button>}
             {mode === "orbit" && snap.mission.config.centralBody !== "earth" && <button className={`btn sm ${earthView ? "primary" : ""}`} style={{ position: "absolute", right: 8, top: 74, pointerEvents: "auto" }} title="Look back from Earth: see the phase this world shows from home, and watch it change as you turn time" onClick={() => { const next = !earthView; setEarthView(next); if (next) setChase(false); workspace.current?.viewFromEarth(next); }}>{earthView ? "◉ From Earth" : "From Earth"}</button>}
-            <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", gap: 8, pointerEvents: "auto" }}><Coach snap={snap} /><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(118px, 1fr))", gap: 8 }}>
+            <div className="stage-bottom"><Coach snap={snap} /><div className="tiles">
               {tiles.map((t) => (
                 <div key={`${t.k}:${pulsed.nodes.includes(t.node) ? pulsed.key : 0}`} className={`metric glass ${pulsed.nodes.includes(t.node) ? "pulse" : ""}`} title={`${EXPLAIN[t.k] ?? ""} (model: ${t.node})`}>
                   <div className="k">{t.k}</div><div className="v" style={{ color: t.tone === "bad" ? "var(--red)" : undefined }}>{t.v}<span className="u">{t.u}</span></div>
@@ -348,6 +438,13 @@ export default function MissionPage() {
             </div></div>
           </div>
           <aside className="glass right">
+            {selected && (() => {
+              const part = snap.mission.config.spacecraft.components.find((x: any) => x.id === selected);
+              if (!part) return null;
+              return <PartCard c={ctx} part={part} onClose={() => setSelected(null)} onAdjust={() => setTab("design")} />;
+            })()}
+            {/* What the crew's AIs are doing, inside the side panel: nothing floats over the 3D stage. */}
+            {tab !== "ai" && !selected && <AiQueue requests={requests.filter((r) => ["queued", "analyzing", "planning", "executing", "awaiting_approval", "awaiting_clarification"].includes(r.status))} members={snap.session.members} onOpen={() => setTab("ai")} />}
             <div className="tabs">{(["ai", "design", "systems", "analysis", "designs", "review", "log"] as Tab[]).map((t) => <button key={t} className={`tab ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>{t === "ai" ? `AI${proposals.some((p) => p.status === "awaiting_approval") ? " •" : ""}` : t}</button>)}</div>
             {tab === "design" && <DesignPanel c={ctx} />}
             {tab === "ai" && <AiPanel c={ctx} />}

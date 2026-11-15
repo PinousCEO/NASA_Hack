@@ -62,5 +62,5 @@ for (const [who, p] of [["lead", lead], ["second member", viewer]]) {
 }
 say(`page errors: ${problems.length ? problems.join(" || ") : "none"}`);
 fs.writeFileSync(path.resolve("reports/evidence/ui-buttons.md"), lines.join("\n") + "\n");
-await browser.close();
+await Promise.race([browser.close(), new Promise((r) => setTimeout(r, 8000))]); // closing a headless browser can hang while another Edge is open
 process.exit(bad ? 1 : 0);

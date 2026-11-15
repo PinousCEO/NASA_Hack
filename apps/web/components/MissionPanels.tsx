@@ -1,7 +1,7 @@
 "use client";
 /** HUD panels of the mission workspace. All state comes from the authoritative snapshot; every action goes to the server. */
 import { useEffect, useRef, useState } from "react";
-import { api, type Evaluation, fmt, type Presence, type Snapshot } from "@/lib/api";
+import { api, type Evaluation, fmt, type Presence, type Snapshot, clockText } from "@/lib/api";
 import { bus } from "@/lib/bus";
 import type { Collab, Patch } from "@/lib/collab";
 import { BODY_RADIUS_KM } from "@/lib/scene/MissionScene";
@@ -204,6 +204,7 @@ export function DesignPanel({ c }: { c: Ctx }) {
       })}
       <hr className="hairline" />
       <h3 className="eyebrow">Component catalogue</h3>
+      <p className="faint" style={{ fontSize: 11, margin: "0 0 6px" }}>{c.snap.session.mode === "sandbox" ? "Sandbox: every part." : c.snap.session.difficulty === "cadet" ? "Cadet level: the simple parts, and the ones this mission's kit lays out. Engineer and Chief levels add the advanced parts." : "Simple and advanced parts. An advanced part does more and asks more: mass, power, money."}</p>
       {c.snap.scenario.disciplines.map((d) => {
         const items = c.snap.scenario.catalog.filter((i: any) => i.discipline === d.id);
         if (!items.length) return null;
@@ -212,7 +213,7 @@ export function DesignPanel({ c }: { c: Ctx }) {
             <div className="mono dim" style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", margin: "6px 0" }}>{d.name}</div>
             {items.map((i: any) => (
               <div key={i.id} className="row between objective" title={i.description}>
-                <span style={{ fontSize: 13 }}>{i.label}<div className="faint mono" style={{ fontSize: 11 }}>{fmt(i.component.massKg)} kg · ${fmt(i.component.costMusd)}M{i.component.powerW ? ` · ${i.component.powerW} W` : ""}</div></span>
+                <span style={{ fontSize: 13 }}>{i.label}{i.tier === "advanced" && <span className="chip warn" style={{ marginLeft: 6, fontSize: 9 }} title="Does more and asks more than the simple choice">advanced</span>}<div className="faint mono" style={{ fontSize: 11 }}>{fmt(i.component.massKg)} kg · ${fmt(i.component.costMusd)}M{i.component.powerW ? ` · ${i.component.powerW} W` : ""}</div></span>
                 <button className="btn sm" disabled={!canEdit(c) || adding !== null} onClick={() => add(i.id)}>{adding === i.id ? <span className="spinner" /> : "Add"}</button>
               </div>
             ))}
@@ -259,14 +260,18 @@ export function AiPanel({ c }: { c: Ctx }) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [whose, setWhose] = useState<"mine" | "crew">("mine");
   const [view, setView] = useState<"all" | "built" | "failed">("all");
+  // Each topic has its own thread: the mission as a whole (null), or one part. Selecting a part opens its thread.
+  const [thread, setThread] = useState<string | null>(c.selected);
+  useEffect(() => { setThread(c.selected); }, [c.selected]);
   const input = useRef<HTMLTextAreaElement>(null);
+  const stream = useRef<HTMLDivElement>(null);
   // Another panel can hand a question over (a broken limit, a part that was clicked).
-  useEffect(() => bus.listen("ask", (t) => { setText(String(t)); setWhose("mine"); setTimeout(() => input.current?.focus(), 60); }), []);
+  useEffect(() => bus.listen("ask", (t) => { setText(String(t)); setWhose("mine"); setView("all"); setTimeout(() => input.current?.focus(), 60); }), []);
   const send = async (t: string): Promise<void> => {
     if (!t.trim()) return;
     setBusy(true);
     try {
-      await api("POST", `/api/sessions/${c.sid}/requests`, { text: t });
+      await api("POST", `/api/sessions/${c.sid}/requests`, { text: t, ...(thread ? { topic: thread } : {}) });
       setText("");
       setWhose("mine");
       c.reloadLists();
@@ -278,7 +283,7 @@ export function AiPanel({ c }: { c: Ctx }) {
     try { await api("POST", `/api/sessions/${c.sid}/proposals/${id}/${action}`, { reason, acceptViolations }); c.reloadLists(); } catch (err) { c.toast((err as Error).message, "warn"); }
   };
   const broken = c.snap.checks.find((x) => x.status === "fail");
-  const starters = [
+  const missionStarters = [
     ...(broken ? [`Why is "${broken.description}" failing, and what could fix it?`] : []),
     "If we had a bigger antenna, could we send more data home?",
     "What lines does a camera need before it can work?",
@@ -288,24 +293,46 @@ export function AiPanel({ c }: { c: Ctx }) {
     "How much power do we have to spare?",
   ];
   const didNotHold = (r: any): boolean => ["refuted", "outside_model", "cannot"].includes(r.answer?.verdict) || ["infeasible", "rejected"].includes(r.status);
-  const list = c.requests.filter((r) => (whose === "crew" || r.user?.id === c.accountId) && (view === "all" || (view === "failed" ? didNotHold(r) : ["built", "built_breaks_limit"].includes(r.answer?.verdict))));
+  const parts: any[] = c.snap.mission.config.spacecraft.components;
+  const partName = (id: string | null): string => (id ? (parts.find((p) => p.id === id)?.name ?? "a removed part") : "The mission");
+  const talk = c.requests.filter((r) => !r.action);
+  // "Mine" shows one thread; "Whole crew" shows what everyone shared and what reached the design, across threads.
+  const list = (whose === "crew" ? c.requests : talk.filter((r) => r.user?.id === c.accountId && (r.topic ?? null) === thread))
+    .filter((r) => view === "all" || (view === "failed" ? didNotHold(r) : ["built", "built_breaks_limit"].includes(r.answer?.verdict)))
+    .slice()
+    .sort((x, y) => String(x.createdAt ?? "").localeCompare(String(y.createdAt ?? "")));
   const failedCount = c.requests.filter((r) => !r.private && didNotHold(r)).length;
+  const myThreads = [...new Set(talk.filter((r) => r.user?.id === c.accountId && r.topic).map((r) => r.topic as string))];
+  const threads: (string | null)[] = [null, ...new Set([...(thread ? [thread] : []), ...myThreads])];
+  const count = (id: string | null): number => talk.filter((r) => r.user?.id === c.accountId && (r.topic ?? null) === id).length;
+  const about = thread ? parts.find((p) => p.id === thread) : null;
+  const starters = about
+    ? [`What does the ${about.name} do, and what is it connected to?`, `What lines does the ${about.name} need, and what do they weigh?`, `What would change if we made the ${about.name} bigger?`, `Could we do without the ${about.name}? What would we lose?`]
+    : missionStarters;
+  // New messages appear at the bottom, and the view follows them.
+  const tail = list.length ? `${list[list.length - 1].id}:${list[list.length - 1].status}:${list.length}` : "";
+  useEffect(() => { const el = stream.current; if (el) el.scrollTop = el.scrollHeight; }, [tail, thread, whose]);
   return (
     <div className="chat">
       <div className="row between">
         <h3 className="eyebrow">My AI</h3>
         <div className="seg"><button className={whose === "mine" ? "on" : ""} onClick={() => setWhose("mine")}>Mine</button><button className={whose === "crew" ? "on" : ""} onClick={() => setWhose("crew")}>Whole crew</button></div>
       </div>
-      <div className="seg thin" title="Ideas that did not hold are kept with their reasons, so the crew does not try the same thing twice. Others see yours once you share them."><button className={view === "all" ? "on" : ""} onClick={() => setView("all")}>Everything</button><button className={view === "built" ? "on" : ""} onClick={() => setView("built")}>Built</button><button className={view === "failed" ? "on" : ""} onClick={() => setView("failed")}>Did not hold · {failedCount}</button></div>
-      <textarea ref={input} className="input" placeholder="Ask how something works, or try an idea: “If we had …, could we …?”" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && (e.ctrlKey || e.metaKey) && void send(text)} />
-      <div className="row between"><span className="faint" style={{ fontSize: 11 }}>Ctrl+Enter to send. This conversation is yours; the crew sees only what you share and what reaches the design.</span><button className="btn primary sm" disabled={busy || !text.trim()} title={busy ? "Sending…" : !text.trim() ? "Type a question or an idea first" : "Send to your AI (Ctrl+Enter)"} onClick={() => send(text)}>{busy ? <span className="spinner" /> : "Send"}</button></div>
-      {list.length === 0 && view !== "all" && <div className="faint" style={{ fontSize: 12 }}>{view === "failed" ? "No idea has been turned down yet. When your AI says an idea does not hold, it stays here with the reason; share it so the crew can build on it." : "Nothing built by an AI yet."}</div>}
-      {list.length === 0 && view === "all" && (
-        <div className="starters">
-          <div className="faint" style={{ fontSize: 11 }}>Things to try</div>
-          {starters.map((e) => <button key={e} onClick={() => setText(e)}>{e}</button>)}
+      {whose === "mine" && (
+        <div className="threads" title="Each part has its own conversation. Select a part in the scene to open its thread.">
+          {threads.map((id) => <button key={id ?? "mission"} className={thread === id ? "on" : ""} onClick={() => { setThread(id); if (id !== c.selected) c.setSelected(id); }}>{partName(id)}{count(id) > 0 && <i>{count(id)}</i>}</button>)}
         </div>
       )}
+      <div className="seg thin" title="Ideas that did not hold are kept with their reasons, so the crew does not try the same thing twice. Others see yours once you share them."><button className={view === "all" ? "on" : ""} onClick={() => setView("all")}>Everything</button><button className={view === "built" ? "on" : ""} onClick={() => setView("built")}>Built</button><button className={view === "failed" ? "on" : ""} onClick={() => setView("failed")}>Did not hold · {failedCount}</button></div>
+      <div className="stream" ref={stream}>
+      {list.length === 0 && view !== "all" && <div className="faint" style={{ fontSize: 12 }}>{view === "failed" ? "No idea has been turned down yet. When your AI says an idea does not hold, it stays here with the reason; share it so the crew can build on it." : "Nothing built by an AI yet."}</div>}
+      {list.length === 0 && view === "all" && whose === "mine" && (
+        <div className="starters">
+          <div className="faint" style={{ fontSize: 11 }}>{about ? `Ask about the ${about.name}` : "Things to try"}</div>
+          {starters.map((e) => <button key={e} onClick={() => { setText(e); input.current?.focus(); }}>{e}</button>)}
+        </div>
+      )}
+      {list.length === 0 && view === "all" && whose === "crew" && <div className="faint" style={{ fontSize: 12 }}>Nothing from the crew yet.</div>}
 
       {list.map((r) => {
         const proposal = c.proposals.find((p) => p.id === r.proposalId);
@@ -335,7 +362,7 @@ export function AiPanel({ c }: { c: Ctx }) {
         const mine = r.user?.id === c.accountId;
         return (
           <div key={r.id} className="turn">
-            <div className="me"><span className="who">{whose === "crew" ? memberName(c, r.user.id) : "You"}</span><p>{r.text}</p></div>
+            <div className="me"><span className="who">{whose === "crew" ? `${memberName(c, r.user.id)} · ${partName(r.topic ?? null)}` : "You"}</span><p>{r.text}</p></div>
             <div className={`ai ${kind}`}>
               <div className="row between"><span className="who">AI</span><span className={`chip ${kind}`}>{working && <span className="spinner" style={{ width: 9, height: 9 }} />}{deployed ? "In the design" : r.status === "rejected" ? "Rejected" : label}</span></div>
               {r.answer ? <p>{r.answer.text}</p> : working ? <p className="dim">Looking at the mission, then building and testing in a copy…</p> : r.error ? <p>{r.error}</p> : null}
@@ -372,6 +399,12 @@ export function AiPanel({ c }: { c: Ctx }) {
           </div>
         );
       })}
+      </div>
+      <div className="composer">
+        <div className="to">To your AI · about <b>{partName(thread)}</b></div>
+        <textarea ref={input} className="input" placeholder={about ? `Ask about the ${about.name}, or try an idea for it…` : "Ask how something works, or try an idea: “If we had …, could we …?”"} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && (e.ctrlKey || e.metaKey) && void send(text)} />
+        <div className="row between"><span className="faint" style={{ fontSize: 11 }}>Ctrl+Enter to send. Yours until you share it.</span><button className="btn primary sm" disabled={busy || !text.trim()} title={busy ? "Sending…" : !text.trim() ? "Type a question or an idea first" : "Send to your AI (Ctrl+Enter)"} onClick={() => send(text)}>{busy ? <span className="spinner" /> : "Send"}</button></div>
+      </div>
       {open && (
         <Modal onClose={() => setOpen(null)}>
             <div className="row between"><h2 style={{ fontSize: 20, textTransform: "none" }}>{open.text}</h2><button className="btn sm ghost" onClick={() => setOpen(null)}>Close</button></div>
@@ -515,7 +548,8 @@ export function ReviewPanel({ c, onSubmitted }: { c: Ctx; onSubmitted(e: Evaluat
   const sandbox = c.snap.session.mode === "sandbox";
   return (
     <div className="stack">
-      <h3 className="eyebrow">Concept maturity · CML {m.level} {m.levelName}</h3>
+      <h3 className="eyebrow">Concept maturity · CML {m.level}</h3>
+      <div className="faint" style={{ fontSize: 11.5, margin: "-4px 0 8px" }}>{m.levelName}</div>
       {[1, 2, 3, 4, 5].map((level) => (
         <div key={level} className="metric" style={{ borderColor: m.level >= level ? "rgba(61,220,151,0.45)" : undefined }}>
           <div className="row between"><b className="mono" style={{ color: m.level >= level ? "var(--green)" : "var(--dim)" }}>CML {level}</b><span className={`chip ${m.level >= level ? "ok" : ""}`}>{m.level >= level ? "reached" : "open"}</span></div>
@@ -570,14 +604,14 @@ export function LogPanel({ c }: { c: Ctx }) {
       <h3 className="eyebrow">Versions</h3>
       {[...c.snap.versions].reverse().slice(0, 25).map((v: any) => (
         <div key={v.version} className="row between objective">
-          <span><b className="mono">v{v.version}</b> <span style={{ fontSize: 12 }}>{v.note}</span><div className="faint" style={{ fontSize: 11 }}>{memberName(c, v.publishedBy)} · {new Date(v.publishedAt).toLocaleTimeString()} · recalculated {v.recalculated.length}</div></span>
+          <span><b className="mono">v{v.version}</b> <span style={{ fontSize: 12 }}>{v.note}</span><div className="faint" style={{ fontSize: 11 }}>{memberName(c, v.publishedBy)} · {clockText(v.publishedAt)} · recalculated {v.recalculated.length}</div></span>
           {lead && v.version !== c.snap.mission.version && !c.snap.game.submitted && <button className="btn sm ghost" onClick={() => { const reason = window.prompt(`Roll back to v${v.version}? Reason:`); if (reason !== null) void api("POST", `/api/sessions/${c.sid}/rollback`, { version: v.version, reason }).catch((e) => c.toast(e.message, "warn")); }}>Restore</button>}
         </div>
       ))}
       {lead && audit && (<>
         <hr className="hairline" />
         <h3 className="eyebrow">Audit trail</h3>
-        {audit.map((e) => <div key={e.seq} className="mono faint" style={{ fontSize: 11 }}><span style={{ color: e.outcome === "ok" ? "var(--dim)" : "var(--red)" }}>#{e.seq} {e.action}</span> · {memberName(c, e.actor)} · {new Date(e.at).toLocaleTimeString()}</div>)}
+        {audit.map((e) => <div key={e.seq} className="mono faint" style={{ fontSize: 11 }}><span style={{ color: e.outcome === "ok" ? "var(--dim)" : "var(--red)" }}>#{e.seq} {e.action}</span> · {memberName(c, e.actor)} · {clockText(e.at)}</div>)}
       </>)}
     </div>
   );

@@ -35,7 +35,7 @@ const tokens = {
   DIRTY: (() => { try { return String(execFileSync("git", ["status", "--short"], { cwd: ROOT }).toString().split("\n").filter(Boolean).length); } catch { return "?"; } })(),
   VERIFICATION_SUMMARY: (() => {
     let sum; try { sum = JSON.parse(read("reports/evidence/summary.json")); } catch { return "(전체 재실행 요약이 아직 없다: `node reports/tools/run-all-evidence.mjs`)"; }
-    const kind = (k) => k.replace("code level; language model is a test double", "코드 수준, 언어 모델은 테스트 더블").replace("real browser, own fresh server, no language model, XR in the IWER emulator", "실제 브라우저, 자체 새 서버, 언어 모델 없음, XR은 IWER 에뮬레이터").replace("two real browsers, LIVE language model", "실제 브라우저 2개, **실제 언어 모델**").replace("real browser, LIVE language model", "실제 브라우저, **실제 언어 모델**").replace("real browser + WebXR emulator (IWER)", "실제 브라우저 + **WebXR 에뮬레이터**").replace("four real HTTP+WebSocket clients", "실제 HTTP·WebSocket 클라이언트 4개").replace("server API, no language model", "서버 API, 언어 모델 없음").replace("real browser, two roles", "실제 브라우저, 역할 2종").replace("real browser", "실제 브라우저");
+    const kind = (k) => k.replace("code level; language model is a test double", "코드 수준, 언어 모델은 테스트 더블").replace("real browser, own fresh server, no language model, XR in the IWER emulator", "실제 브라우저, 자체 새 서버, 언어 모델 없음, XR은 IWER 에뮬레이터").replace("two real browsers, LIVE language model", "실제 브라우저 2개, **실제 언어 모델**").replace("real browser, LIVE language model", "실제 브라우저, **실제 언어 모델**").replace("real browser + WebXR emulator (IWER)", "실제 브라우저 + **WebXR 에뮬레이터**").replace("four real HTTP+WebSocket clients", "실제 HTTP·WebSocket 클라이언트 4개").replace("server API, no language model", "서버 API, 언어 모델 없음").replace("two real browsers, built-in analyser (no language model)", "실제 브라우저 2개, 내장 분석기(언어 모델 없음)").replace("real browser, built-in analyser (no language model)", "실제 브라우저, 내장 분석기(언어 모델 없음)").replace("real browser, two roles", "실제 브라우저, 역할 2종").replace("real browser", "실제 브라우저");
     return [`실행: ${sum.started} – ${sum.finished} · 합계 **${sum.total}개 검사 통과, ${sum.failed}개 실패** (${sum.rows.length}개 실행)`, "", "| 검증 | 종류 | 통과 | 실패 | 결과 | 소요 |", "|---|---|---|---|---|---|", ...sum.rows.map((r) => `| ${r.label} | ${kind(r.kind)} | ${r.passed} | ${r.failed} | **${r.ok ? "PASS" : "FAIL"}** | ${r.seconds}초 |`)].join("\n");
   })(),
   SUMMARY_COUNTS: `${reqs.length}개 항목: ${summary}`,
@@ -134,7 +134,7 @@ await view.goto("file:///" + htmlFile.split("\\").join("/"), { waitUntil: "load"
 const total = await view.evaluate(() => document.documentElement.scrollHeight);
 const shots = Math.min(40, Math.ceil(total / 973));
 for (let n = 0; n < shots; n++) await view.screenshot({ path: path.join(pagesDir, `view-${String(n + 1).padStart(2, "0")}.png`), clip: { x: 0, y: n * 973, width: 688, height: Math.min(973, total - n * 973) }, fullPage: true });
-await browser.close();
+await Promise.race([browser.close(), new Promise((r) => setTimeout(r, 8000))]); // closing a headless browser can hang while another Edge is open
 
 // ---- Check what came out ----
 const bytes = fs.statSync(pdfFile).size;

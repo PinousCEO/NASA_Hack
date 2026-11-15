@@ -10,6 +10,15 @@ import { useReveal } from "@/components/Motion";
 import { go as navigate, type Account, api, currentAccount } from "@/lib/api";
 import { IMAGERY_CREDITS } from "@/lib/scene/space";
 
+/** The three levels a mission can be played at. The same problem; how much help and how much room differ. */
+const LEVELS = [
+  { id: "cadet", stars: 1, name: "Cadet", text: "Roomy budget, nothing goes wrong, and your AI gives hints." },
+  { id: "engineer", stars: 2, name: "Engineer", text: "Nominal limits and one thing wrong at the start." },
+  { id: "chief", stars: 3, name: "Chief", text: "Tight limits. Something will go wrong in flight." },
+] as const;
+/** Stars for a score: one for a mission that flies, two for a strong one, three for an excellent one. */
+const starsFor = (score: number | null | undefined): number => (score == null ? 0 : score >= 90 ? 3 : score >= 75 ? 2 : score >= 55 ? 1 : 0);
+
 const STAGES = [
   ["Stage 1", "Concept", "Read the science questions. Sketch the mission."],
   ["Stage 2", "Feasibility", "Does the orbit, power and link close?"],
@@ -52,6 +61,10 @@ export default function TitleScreen() {
   const [started, setStarted] = useState(false);
   const [selected, setSelected] = useState(0);
   const [sound, setSound] = useState(true);
+  // Level select: which world's missions are listed, and which mission is being launched at which level.
+  const [world, setWorld] = useState<"all" | "moon" | "mars" | "earth">("all");
+  const [launching, setLaunching] = useState<string | null>(null);
+  const [launchError, setLaunchError] = useState<string | null>(null);
   const [clock, setClock] = useState("");
   const sfx = useSfx(sound);
 
@@ -60,6 +73,9 @@ export default function TitleScreen() {
     let tries = 0;
     const loadBriefs = (): void => void api("GET", "/api/briefs").then((f) => { setFeed(f); if (f.briefs.length === 0 && tries++ < 20) setTimeout(loadBriefs, 4000); }).catch(() => undefined);
     loadBriefs();
+    // The AI adds missions on its own; pick them up without a reload.
+    const refresh = setInterval(() => void api("GET", "/api/briefs").then(setFeed).catch(() => undefined), 60000);
+    window.addEventListener("pagehide", () => clearInterval(refresh), { once: true });
     void api("GET", "/api/leaderboard").then(setBoard).catch(() => undefined);
     void currentAccount().then((a) => {
       setAccount(a);
@@ -87,6 +103,21 @@ export default function TitleScreen() {
   const pressure = (b: any): number => (b.constraints.budgetFactor * b.constraints.massFactor < 0.8 ? 3 : b.constraints.budgetFactor * b.constraints.massFactor < 0.98 ? 2 : 1);
 
   const go = (href: string): void => { navigate(href); };
+  /** Start a mission from its card at the chosen level: one click from the board into play. */
+  const play = async (b: any, level: (typeof LEVELS)[number]): Promise<void> => {
+    if (!account) return go(`/auth?next=${encodeURIComponent("/#missions")}`);
+    setLaunching(`${b.id}:${level.id}`);
+    setLaunchError(null);
+    sfx("select");
+    try {
+      const created = await api("POST", "/api/sessions", { scenarioId: b.template, briefId: b.id, difficulty: level.id, name: String(b.title).slice(0, 60), visibility: "public", policy: "open", discipline: "systems" });
+      go(`/mission?s=${created.session.id}&new=1`);
+    } catch (err) {
+      setLaunchError(err instanceof Error ? err.message : "Could not start the mission");
+      setLaunching(null);
+    }
+  };
+  const listed = (feed?.briefs ?? []).filter((b: any) => world === "all" || b.destination === world);
   const menu = useMemo(() => [
     { label: "New mission", hint: "Pick a destination and assemble a crew", run: () => go(account ? "/lobby" : "/auth?next=/lobby") },
     ...(resume ? [{ label: "Continue", hint: resume.name, run: () => go(`/mission?s=${resume.id}`) }] : []),
@@ -163,6 +194,7 @@ export default function TitleScreen() {
             <div><div className="eyebrow">Mission board</div><h2 style={{ marginBottom: 12 }}>New problems, every day</h2></div>
             <div className="row wrap" style={{ marginBottom: 14 }}>
               {feed && <span className="chip">{feed.status.total} issued · {feed.status.today} today</span>}
+              {feed?.status.autonomous && <span className="chip ok" title="When a crew takes a mission, or fewer than four unplayed missions are left, the AI writes new ones by itself. This list refreshes every minute.">AI keeps writing missions · {feed.status.unplayed} waiting</span>}
               {feed && <span className={`chip ${feed.status.source === "ai" ? "info" : ""}`}>{feed.status.source === "ai" ? `Written by ${feed.status.modelId}` : "Built-in problem set (no language model configured)"}</span>}
               <button className="btn sm" disabled={!account || issuing} title={account ? "Ask the mission office for three more briefs" : "Sign in to request new missions"} onClick={() => void issue()}>{issuing ? <><span className="spinner" /> Writing briefs…</> : "Generate new missions"}</button>
             </div>
@@ -170,24 +202,40 @@ export default function TitleScreen() {
           <p className="dim reveal" style={{ maxWidth: "78ch", marginBottom: 22 }}>
             Each brief is a fresh design problem posed on a validated engineering baseline. Briefs are written continuously and every one — with what crews learn solving it — is added to the research archive. A brief frames the problem; your score always comes from the engineering models.
           </p>
+          <div className="row wrap reveal" style={{ marginBottom: 16, gap: 8 }}>
+            {(["all", "moon", "mars", "earth"] as const).map((w) => (
+              <button key={w} className={`btn sm ${world === w ? "" : "ghost"}`} onClick={() => { setWorld(w); sfx("move"); }}>{w === "all" ? "All worlds" : w === "earth" ? "Earth orbit" : w[0]!.toUpperCase() + w.slice(1)} · {(feed?.briefs ?? []).filter((b: any) => w === "all" || b.destination === w).length}</button>
+            ))}
+            <span className="faint" style={{ fontSize: 12, alignSelf: "center" }}>Pick a mission, pick a level, play. ★ flies · ★★ strong · ★★★ excellent.</span>
+          </div>
+          {launchError && <div className="chip bad" style={{ whiteSpace: "normal", marginBottom: 12 }}>{launchError}</div>}
           <div className="grid cols-3">
-            {(feed?.briefs ?? []).slice(0, 9).map((b: any, i: number) => (
-              <a key={b.id} className="glass brief-card reveal" href={account ? `/lobby?brief=${b.id}` : `/auth?next=${encodeURIComponent(`/lobby?brief=${b.id}`)}`} style={{ ["--d" as string]: `${(i % 3) * 0.08}s` }}>
+            {listed.slice(0, 12).map((b: any, i: number) => (
+              <div key={b.id} className="glass brief-card reveal" style={{ ["--d" as string]: `${(i % 3) * 0.08}s` }}>
                 <div className="row between">
                   <span className={`dest ${b.destination}`}>{b.destination}</span>
                   <span className={`chip ${b.origin === "ai" ? "info" : ""}`}>{b.origin === "ai" ? "AI-written" : "Built-in"} · {b.day}</span>
                 </div>
-                <h3>{b.title}</h3>
+                <h3><a href={account ? `/lobby?brief=${b.id}` : `/auth?next=${encodeURIComponent(`/lobby?brief=${b.id}`)}`} title="Read the full brief and set up a crew">{b.title}</a></h3>
                 <p className="dim">{b.problem}</p>
                 <p className="why">{b.whyItMatters}</p>
+                {b.world && <div className="row wrap" style={{ gap: 6, marginTop: 8 }}>{b.world.target && <span className="chip" style={{ color: "#ffb020" }} title="The place this mission is about; it is marked on the world when you play">◎ {b.world.target.name}</span>}{b.world.craftName && <span className="chip" title="This mission's spacecraft">▲ {b.world.craftName}</span>}</div>}
                 <div className="row wrap" style={{ marginTop: "auto", paddingTop: 14 }}>
                   <span className="threat" title="Programme pressure from the brief's budget and mass limits">Pressure {[1, 2, 3].map((n) => <i key={n} className={n <= pressure(b) ? "on" : ""} />)}</span>
                   <span className="chip">Budget ×{b.constraints.budgetFactor.toFixed(2)}</span>
                   <span className="chip">Mass ×{b.constraints.massFactor.toFixed(2)}</span>
                   <span className="chip">Duration ×{b.constraints.durationFactor.toFixed(2)}</span>
                 </div>
-                <div className="flown">{b.crews > 0 ? <>Flown by <b>{b.crews}</b> crew{b.crews === 1 ? "" : "s"} · score to beat <b>{Number(b.best).toFixed(1)}</b></> : "Not flown yet — be the first crew"}</div>
-              </a>
+                <div className="flown">{b.crews > 0 ? <><span className="stars" title={`Best score so far: ${Number(b.best).toFixed(1)}`}>{[1, 2, 3].map((n) => <i key={n} className={n <= starsFor(b.best) ? "on" : ""}>★</i>)}</span> Flown by <b>{b.crews}</b> crew{b.crews === 1 ? "" : "s"} · score to beat <b>{Number(b.best).toFixed(1)}</b></> : "Not flown yet — be the first crew"}</div>
+                <div className="levels">
+                  {LEVELS.map((l) => (
+                    <button key={l.id} className="level" title={l.text} disabled={launching !== null} onClick={() => void play(b, l)}>
+                      {launching === `${b.id}:${l.id}` ? <span className="spinner" /> : <span className="stars">{"★".repeat(l.stars)}</span>}
+                      <b>{l.name}</b>
+                    </button>
+                  ))}
+                </div>
+              </div>
             ))}
             {!feed && <div className="glass card dim">Mission briefs load from the platform server. Start it with <span className="mono">npm run dev</span>.</div>}
           </div>
@@ -207,7 +255,7 @@ export default function TitleScreen() {
             </div>
           </div>
           <p className="faint" style={{ marginTop: 14, fontSize: 12 }}>
-            Every change re-runs real engineering models and reaches all seats at once. Ask the AI builder for instruments, scripts or 3D models in plain language; it previews before it deploys. Stages follow JPL's Concept Maturity Levels (Wessen et al.) — a teaching aid, not a formal review.
+            Every change re-runs real engineering models and reaches all seats at once. A part works only through its power, data and control lines. Each player has their own AI: ask it how something works, or have it build a part, a line or the control logic that runs on board — it shows what the flight would look like before anything is deployed. Stages follow JPL's Concept Maturity Levels (Wessen et al.) — a teaching aid, not a formal review.
           </p>
         </section>
 

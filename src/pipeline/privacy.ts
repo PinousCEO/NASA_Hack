@@ -16,6 +16,7 @@ export function redacted(r: RequestRecord): Record<string, unknown> {
     id: r.id,
     private: true,
     text: "",
+    ...(r.topic ? { topic: r.topic } : {}),
     user: r.user,
     status: r.status,
     createdAt: r.createdAt,

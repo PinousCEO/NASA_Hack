@@ -22,6 +22,7 @@ import { type Account, AuthError } from "../platform/auth.js";
 import type { Platform } from "../platform/platform.js";
 import { describeSecrets, redact } from "../platform/secrets.js";
 import { type MissionSession, SessionError } from "../platform/sessions.js";
+import { CrewmateService } from "../platform/crewmates.js";
 import type { CapabilityCategory } from "../registry/capability.js";
 import { executeDirect } from "../registry/direct.js";
 import { CollabHub } from "./collab.js";
@@ -103,6 +104,8 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
   const allowedOrigins = new Set(options.allowedOrigins ?? []);
   const secure = Boolean(options.tls);
   const { auth, audit, sessions } = platform;
+  // AI crewmates work through this server's own public API, like any other client (see platform/crewmates.ts).
+  const crewmates = new CrewmateService(auth, (platform as { assetsDir?: string }).assetsDir ? path.dirname((platform as { assetsDir?: string }).assetsDir!) : null);
 
   const accountOf = (req: IncomingMessage): Account | undefined => auth.authenticate(bearerOf(req) ?? cookieOf(req));
   const sessionCookie = (token: string, maxAgeS: number): string => `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeS}${secure ? "; Secure" : ""}`;
@@ -233,9 +236,28 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
       }
       throw new HttpError(404, "Not found");
     }
+    if (route === "POST /transcribe") {
+      // A short recording of a signed-in player speaking, turned into the sentence they said. Nothing is stored.
+      requireAccount();
+      const body = await readJson(req);
+      const audio = Buffer.from(String(body.audio ?? ""), "base64");
+      if (audio.length < 800) throw new HttpError(400, "No speech was recorded");
+      if (audio.length > 3 * 1024 * 1024) throw new HttpError(413, "The recording is too long");
+      if (!platform.llm.transcribe || !platform.llm.status().available) throw new HttpError(503, "Speech input needs a language model with speech-to-text, and none is configured");
+      try {
+        return json(200, { text: await platform.llm.transcribe({ audio, mime: String(body.mime ?? "audio/webm").slice(0, 80) }) });
+      } catch (err) {
+        throw new HttpError(502, err instanceof Error ? err.message : "Speech could not be transcribed");
+      }
+    }
+    if (route === "GET /llm-usage") {
+      requireAccount();
+      const usage = platform.llm.usage?.() ?? null;
+      return json(200, { modelId: platform.llm.modelId, available: platform.llm.status().available, usage });
+    }
     if (route === "GET /briefs") {
       const stats = sessions.briefStats();
-      return json(200, { status: platform.briefs.status(), briefs: platform.briefs.list(30).map((b) => ({ ...b, crews: stats[b.id]?.crews ?? 0, best: stats[b.id]?.best ?? null })) });
+      return json(200, { status: { ...platform.briefs.status(), autonomous: process.env.BRIEF_AUTOGEN !== "off", unplayed: platform.briefs.list(60).filter((b) => b.day === new Date().toISOString().slice(0, 10) && !(stats[b.id]?.crews)).length }, briefs: platform.briefs.list(30).map((b) => ({ ...b, crews: stats[b.id]?.crews ?? 0, best: stats[b.id]?.best ?? null })) });
     }
     if (route === "POST /briefs/generate") {
       const account = requireAccount();
@@ -387,6 +409,8 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
       if (route === "POST /sessions") {
         const body = await readJson(req);
         const session = sessions.create(account, body as never);
+        // A mission was taken off the board: let the AI write its replacement in the background.
+        if (process.env.BRIEF_AUTOGEN !== "off" && typeof (body as { briefId?: unknown }).briefId === "string") void platform.briefs.keepSupplied((id) => (sessions.briefStats()[id]?.crews ?? 0) > 0, process.env.BRIEF_DAILY_CAP ? { dailyCap: Number(process.env.BRIEF_DAILY_CAP) } : {}).catch(() => undefined);
         return json(201, { ...session.snapshot(), inviteCode: session.meta.inviteCode });
       }
       const session: MissionSession | undefined = id ? sessions.get(id) : undefined;
@@ -416,7 +440,7 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
           const body = await readJson(req);
           if (typeof body.text !== "string" || !body.text.trim()) throw new HttpError(400, "text is required");
           if (body.text.length > 4000) throw new HttpError(400, "Request text is too long");
-          const record = session.submitRequest(account.id, body.text, body.trainingConsent === true);
+          const record = session.submitRequest(account.id, body.text, body.trainingConsent === true, typeof body.topic === "string" && /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(body.topic) ? body.topic : undefined);
           return json(202, body.wait === true ? await session.requests.wait(record.id) : record);
         }
         const record = subId ? session.requests.get(subId) : undefined;
@@ -483,6 +507,19 @@ export function createPlatformServer(platform: Platform, options: ServerOptions 
         return json(202, body.wait === true ? await session.requests.wait(record.id) : record);
       }
       if (action === "trajectories" && method === "DELETE" && subId) return json(202, session.removeTrajectory(account.id, subId));
+      if (action === "crewmates") {
+        // AI crewmates join at the lead's word, fill the free seats, and leave at the lead's word.
+        if (method === "GET") return json(200, { crewmates: crewmates.active(session.meta.id) });
+        if (session.member(account.id)?.role !== "lead" && account.role !== "admin") throw new HttpError(403, "Only the mission lead can bring in or send home AI crewmates");
+        if (method === "DELETE") { crewmates.stop(session.meta.id); return json(200, { crewmates: [] }); }
+        if (method === "POST") {
+          const body = await readJson(req);
+          const base = `${secure ? "https" : "http"}://127.0.0.1:${req.socket.localPort}`;
+          const names = await crewmates.start(session, base, typeof body.count === "number" ? body.count : 3);
+          audit.record({ actor: account.id, action: "crewmates.start", detail: { session: session.meta.id, crewmates: names } });
+          return json(201, { crewmates: names });
+        }
+      }
       if (action === "role" && method === "POST") {
         const body = await readJson(req);
         return json(200, { roleClaims: session.claimRole(account.id, typeof body.seat === "string" ? body.seat : null) });

@@ -39,7 +39,10 @@ function show(value: unknown): string | null {
   return null;
 }
 
-function label(key: string): { text: string; unit: string } {
+/** How engineering shorthand is written once a field name has been split into words. */
+const WORDS: [RegExp, string][] = [[/\beb n ?0\b/g, "Eb/N0"], [/\bdb\b/g, "dB"], [/\bdbw\b/g, "dBW"], [/\bdbi\b/g, "dBi"], [/\bbps\b/g, "bit/s"], [/\bdod\b/g, "depth of discharge"], [/\bsoc\b/g, "state of charge"]];
+
+export function label(key: string): { text: string; unit: string } {
   let name = key;
   let unit = "";
   for (const [pattern, u] of UNITS) {
@@ -49,7 +52,9 @@ function label(key: string): { text: string; unit: string } {
       break;
     }
   }
-  const text = name.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_.]/g, " ").toLowerCase();
+  // Words are split at capitals and where letters meet digits ("maxDataRateBpsAt3DbMargin" → "max data rate bit/s at 3 dB margin").
+  let text = name.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Za-z])(\d)/g, "$1 $2").replace(/(\d)([A-Za-z])/g, "$1 $2").replace(/[_.]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+  for (const [pattern, written] of WORDS) text = text.replace(pattern, written);
   return { text: text.charAt(0).toUpperCase() + text.slice(1), unit };
 }
 

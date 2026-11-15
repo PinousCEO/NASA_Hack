@@ -17,3 +17,24 @@ NIGHTSHIFT_STOP
 .claude/
 reports/evidence/ui/_pdf/
 reports/*.html
+
+# screenshots taken only to look the screens over (shots-*.mjs); the report's evidence pictures stay tracked
+reports/evidence/ui/60-*.png
+reports/evidence/ui/61-*.png
+reports/evidence/ui/62-*.png
+reports/evidence/ui/63-*.png
+reports/evidence/ui/64-*.png
+reports/evidence/ui/65-research-*.png
+reports/evidence/ui/70-*.png
+reports/evidence/ui/71-*.png
+reports/evidence/ui/72-*.png
+reports/evidence/ui/73-*.png
+reports/evidence/ui/80-*.png
+reports/evidence/ui/81-*.png
+reports/evidence/ui/82-*.png
+reports/evidence/ui/85-*.png
+.data-archive-*/
+# Other people's material kept locally for reference (the organisers' briefing deck, a copy of the challenge page)
+Data/*.pptx
+data/*.pptx
+docs/CHALLENGE_13_STATEMENT.txt

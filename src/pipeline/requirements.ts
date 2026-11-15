@@ -302,6 +302,28 @@ const LlmRequirement = z.object({
 const PORT_TABLE = `Ports — ${(["bus", "solar_panel", "battery", "instrument", "antenna", "computer", "load", "adcs"] as const).map((t) => `${t}: ${portsOf(t).map((p) => `${p.name} (${p.kind} ${p.dir})`).join(", ")}`).join("; ")}.`;
 const SIGNAL_TABLE = SIGNALS.map((s) => `${s.name} [${s.unit}] ${s.meaning}`).join("; ");
 
+/**
+ * JSON for a model prompt: numbers to five significant figures. The engineering results carry fifteen digits
+ * that no answer needs, and every character sent is paid for.
+ */
+export const compactJson = (value: unknown): string => JSON.stringify(value, (_k, v) => (typeof v === "number" && !Number.isInteger(v) ? Number(v.toPrecision(5)) : v));
+
+/** The derived results a model needs: bulky geometry and what merely repeats the configuration are left out. */
+function derivedForPrompt(derived: MissionVersion["derived"]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(derived)) {
+    if (k === "orbit.trajectory" || k === "scene.lighting") continue;
+    if (k === "systems.wiring" && v.value) {
+      // The lines themselves are in the configuration; here only what they deliver to each part, and parts with trouble first.
+      const w = v.value as { wired: boolean; parts: { id: string; power: number; data: number | null; commandable: boolean | null; notes: string[] }[]; harnessMassKg: number; unconnected: string[]; limited: string[] };
+      out[k] = { wired: w.wired, harnessMassKg: w.harnessMassKg, unconnected: w.unconnected, limited: w.limited, parts: w.parts.map((p) => (p.notes.length ? p : { id: p.id, ok: true, commandable: p.commandable })) };
+      continue;
+    }
+    out[k] = v.value;
+  }
+  return out;
+}
+
 /** One earlier exchange between a player and their AI. */
 export interface Turn { said: string; replied: string; outcome: string }
 
@@ -331,7 +353,7 @@ Each operation has a category, an intent, and a JSON params object. Intents and 
 - compute: { "need": tag, ... } — a calculation. Tags: calc.orbit.elements {altitudeKm?}, calc.orbit.transfer {targetAltitudeKm}, calc.power.budget, calc.comms.link {antennaId?, dataRateBps?}, calc.rover.mobility {slopeDeg?}, calc.ephemeris.sun {time?}.
 - simulate_power: { "orbits"?: number }
 - retrieve_ephemeris: { "target": "sun"|"earth"|"moon"|"mars", "center"?: same set, "time"?: ISO-8601 }
-- generate_asset: either { "assetSpec": {"kind":"box"|"cylinder"|"sphere"|"solar_panel"|"dish_antenna"|"wheel"|"rover_chassis", ...dimensions in metres}, "description"?: string } for an exact parametric shape, or { "prompt": string } for a free-form object described in words (text-to-3D).
+- generate_asset: either { "assetSpec": {"kind":"box"|"cylinder"|"sphere"|"solar_panel"|"dish_antenna"|"wheel"|"rover_chassis", ...dimensions in metres}, "description"?: string } for an exact parametric shape, or { "prompt": string } for a free-form object described in words (text-to-3D; keep the prompt under 500 characters: shape, parts, proportions, materials).
 - generate_script: { "task": string, "name": string, "permissions"?: ["state:read","state:propose","calc"], "scriptId"?: id of an attached script to modify (category code_modification) }
 - run_script: { "scriptId": string, "input"?: object }
 - search_memory: { "query": string }
@@ -408,10 +430,10 @@ export class RequirementAnalyzer {
       schema: LlmRequirement,
       ...(signal ? { signal } : {}),
       prompt: [
-        `Mission configuration (version ${mission.version}):\n${JSON.stringify(core)}`,
+        `Mission configuration (version ${mission.version}):\n${compactJson(core)}`,
         `Scene node ids: ${scene.nodes.map((n) => n.id).join(", ") || "(none)"}`,
         `Attached scripts: ${scripts.map((s) => `${s.id} (${s.name})`).join(", ") || "(none)"}`,
-        `Derived results:\n${JSON.stringify(Object.fromEntries(Object.entries(mission.derived).map(([k, v]) => [k, k === "orbit.trajectory" ? "(omitted)" : v.value])))}`,
+        `Derived results:\n${compactJson(derivedForPrompt(mission.derived))}`,
         ...(this.missionContext ? [`Mission context (the problem the crew is solving, their goals, and the parts catalogue):\n${this.missionContext()}`] : []),
         ...(retrieved?.context ? [`Reference material (retrieved from the research knowledge base):\n${retrieved.context}`] : []),
         ...(player ? [`The player you are talking to:\n${player}`] : []),

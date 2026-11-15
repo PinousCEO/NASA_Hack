@@ -8,7 +8,7 @@
     "BLOCKED_EXTERNAL",
     "PASS"
   ],
-  "updatedAt": "2026-11-15 00:39:45 KST",
+  "updatedAt": "2026-11-15 06:11:41 KST",
   "requirements": [
     {
       "id": "R-OPS-01",
@@ -109,8 +109,8 @@
       "userPath": "My AI panel: ask, then follow up with 'do it'",
       "verify": "Unit test with a scripted model + live model dialogue",
       "expected": "Follow-ups resolve against that player's own earlier turns only",
-      "actual": "Scripted-model test: each player's prompt carries that player's earlier turns and none of the other's; live run: a 4th request extended the controller from the 3rd",
-      "evidence": "tests/crew-ai.test.ts; reports/evidence/e05-e06-build-control.md",
+      "actual": "Scripted-model test: each player's prompt carries that player's earlier turns and none of the other's; live run: a 4th request extended the controller from the 3rd Threads per part are also checked in the UI without a model on every full run.",
+      "evidence": "tests/crew-ai.test.ts; reports/evidence/e05-e06-build-control.md; reports/evidence/ui-chat-no-model.md",
       "status": "PASS",
       "updatedAt": "2026-11-14 23:34:17 KST"
     },
@@ -122,8 +122,8 @@
       "userPath": "My AI → Share with crew",
       "verify": "API + WebSocket test with two accounts",
       "expected": "Other crew see only a stub until shared",
-      "actual": "Two real browsers: Ben's crew view shows 'Ana & their AI — a private conversation' with none of the text; after Ana clicks Share with crew he reads question and answer. HTTP/WebSocket redaction covered by tests.",
-      "evidence": "reports/evidence/ui-crew.md; reports/evidence/ui/11-private-conversation-other-player.png, 12-shared-conversation.png; tests/crew-ai.test.ts",
+      "actual": "Two real browsers: Ben's crew view shows 'Ana & their AI — a private conversation' with none of the text; after Ana clicks Share with crew he reads question and answer. HTTP/WebSocket redaction covered by tests. Also checked in the UI without a model on every full run (two browsers: the other player sees that a conversation happened but neither the UI nor the server gives them its text until it is shared).",
+      "evidence": "reports/evidence/ui-crew.md; reports/evidence/ui/11-private-conversation-other-player.png, 12-shared-conversation.png; tests/crew-ai.test.ts; reports/evidence/ui-private.md",
       "status": "PASS",
       "updatedAt": "2026-11-14 23:46:57 KST"
     },
@@ -304,10 +304,10 @@
       "userPath": "Enter XR",
       "verify": "IWER emulator E2E (not a physical headset)",
       "expected": "Changes cross both ways",
-      "actual": "Same page, same mission state, same engine for desktop and immersive session; verified both ways in the WebXR emulator (13 checks) and the E2E suite. Level of verification: emulator.",
-      "evidence": "reports/evidence/xr-loop.md",
+      "actual": "Same page, same mission state, same engine for desktop and immersive session; verified both ways in the WebXR emulator (13 checks) and the E2E suite. The frame the session draws is captured and checked (15 checks, AR and VR): the session keeps drawing after a part is added, in the systems view and under a sweep of controller rays (a freeze caused by a ray hitting a label was found and fixed); panels are filled for a solo player; the lit side of the world faces the player; picking a part up selects it and Connect wires it; a question asked in the headset is answered on the player's own AI panel. Level of verification: emulator.",
+      "evidence": "reports/evidence/xr-loop.md, reports/evidence/xr-frame.md",
       "status": "PASS",
-      "updatedAt": "2026-11-14 23:51:42 KST"
+      "updatedAt": "2026-11-15 06:11:41 KST"
     },
     {
       "id": "R-XR-02",
@@ -395,8 +395,8 @@
       "userPath": "Open a mission",
       "verify": "Browser screenshots",
       "expected": "All six are on screen without digging",
-      "actual": "Reviewed the first-screen capture: problem and crux, 'Does the mission work?' with what is missing and the end condition, controls/parts/crew kit with reasons, My AI with example asks, a 7-step walkthrough, metric tiles with explanations on hover",
-      "evidence": "reports/evidence/ui/30-first-screen-with-walkthrough.png; reports/evidence/ui-fullflow.md",
+      "actual": "Reviewed the first-screen capture: problem and crux, 'Does the mission work?' with what is missing and the end condition, controls/parts/crew kit with reasons, My AI with example asks, a 7-step walkthrough, metric tiles with explanations on hover Layout is measured at 1280×720, 1366×768, 1536×864 and 1920×1080 (stage stays visible, the box to type in is on screen).",
+      "evidence": "reports/evidence/ui/30-first-screen-with-walkthrough.png; reports/evidence/ui-fullflow.md; reports/evidence/ui-layout.md; reports/evidence/ui-fullflow-no-model.md",
       "status": "PASS",
       "updatedAt": "2026-11-15 00:19:17 KST"
     },

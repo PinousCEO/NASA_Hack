@@ -15,8 +15,8 @@ export type Patch = { op: "set" | "append"; path: string; value: unknown } | { o
 
 export interface CollabEvents {
   snapshot(snapshot: Snapshot & { you: any; presence: Presence[]; resumed: boolean; missed: any[] }): void;
-  version(update: { mission: MissionVersion; checks: Check[]; evaluation: Evaluation; maturity: Maturity; cause: { by: string; kind: string; summary: string; displayName: string } }): void;
-  game(update: { game: any; evaluation: Evaluation; maturity: Maturity }): void;
+  version(update: { mission: MissionVersion; checks: Check[]; evaluation: Evaluation; maturity: Maturity; roles?: Snapshot["roles"]; cause: { by: string; kind: string; summary: string; displayName: string } }): void;
+  game(update: { game: any; evaluation: Evaluation; maturity: Maturity; roles?: Snapshot["roles"] }): void;
   presence(roster: Presence[]): void;
   presenceUpdate(p: Presence): void;
   locks(locks: Record<string, string>): void;
@@ -24,10 +24,14 @@ export interface CollabEvents {
   proposal(proposal: any): void;
   members(members: any[]): void;
   transform(t: { clientId: string; nodeId: string; pose: number[]; color: string }): void;
+  /** A message a crew member sent to the crew (also your own, echoed back). */
+  say(message: CrewMessage): void;
   /** A crewmate turned the world or changed how fast time runs. */
   clock(c: { timeMs: number; rate: number; at: number; by: string }): void;
   status(status: "connecting" | "live" | "reconnecting" | "offline", detail?: string): void;
 }
+
+export interface CrewMessage { id: string; accountId: string; displayName: string; color: string; mode: string; text: string; at: number }
 
 export class Collab {
   private ws: WebSocket | null = null;
@@ -93,7 +97,9 @@ export class Collab {
         this.lastVersion = m.mission.version;
         this.on.snapshot?.(m);
         this.on.presence?.(m.presence);
+        for (const message of (m.chat ?? []) as CrewMessage[]) this.on.say?.(message);
         break;
+      case "crew.say": this.on.say?.(m.message); break;
       case "mission.version":
         this.lastVersion = m.mission.version;
         this.on.version?.(m);
@@ -142,12 +148,17 @@ export class Collab {
   }
 
   /** Ephemeral presence (pose, focus). Throttled; never stored by the server. */
-  presence(p: { head?: number[] | null; hands?: { left: number[] | null; right: number[] | null }; focus?: string | null; mode?: "desktop" | "xr" }, urgent = false): void {
+  presence(p: { head?: number[] | null; hands?: { left: number[] | null; right: number[] | null }; focus?: string | null; point?: number[] | null; mode?: "desktop" | "xr" }, urgent = false): void {
     const now = performance.now();
     if (!urgent && now - this.lastPresence < 80) return;
     this.lastPresence = now;
     if (p.mode) this.mode = p.mode;
     this.send({ type: "presence", ...p });
+  }
+
+  /** Say something to the whole crew. */
+  say(text: string): void {
+    this.send({ type: "say", text });
   }
 
   /** Share the moment this crew is looking at, and how fast time is running. */

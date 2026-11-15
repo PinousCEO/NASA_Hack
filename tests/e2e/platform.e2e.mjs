@@ -323,7 +323,7 @@ try {
 } catch (err) {
   check("e2e run completed", false, err.message.split("\n")[0]);
 } finally {
-  await browser?.close();
+  if (browser) await Promise.race([browser.close(), new Promise((r) => setTimeout(r, 8000))]); // closing a headless browser can hang while another Edge is open
   server.kill();
   await wait(300);
   rmSync(dataDir, { recursive: true, force: true });
@@ -335,3 +335,4 @@ if (failed.length) {
   console.log(serverLog.split("\n").slice(-12).join("\n"));
   process.exit(1);
 }
+process.exit(0);

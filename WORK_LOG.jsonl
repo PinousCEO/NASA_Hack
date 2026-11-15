@@ -77,3 +77,77 @@
 {"at":"2026-11-14T16:07:21.957Z","kst":"2026-11-15 01:07:21 KST","source":"worker","event":"work","current":"added ui-flight and soak to run-all-evidence; next: final run-all-evidence + build-report near the end, respond to user test feedback","next":"optional polish only if it serves the user's stated vision"}
 {"at":"2026-11-14T16:08:42.265Z","source":"stop-hook","event":"continue","minutesLeft":411}
 {"at":"2026-11-14T16:19:00.256Z","source":"stop-hook","event":"allow-stop","why":"stop file present"}
+{"at":"2026-11-14T16:29:37.032Z","kst":"2026-11-15 01:29:37 KST","source":"worker","event":"work","current":"user feedback after testing: remove one-sided accent bands, chat must grow downward, separate chat per part, fix overlapping UI in systems view, AI must keep creating missions by itself, check MR","next":"then run-all-evidence + build-report, commit only if asked"}
+{"at":"2026-11-14T16:35:47.597Z","kst":"2026-11-15 01:35:47 KST","source":"worker","event":"work","current":"user feedback fixed: per-part threads, downward chat, no one-sided bands, one overlay at a time, AI keeps writing missions; full verification running","next":"rebuild report; then MR status-panel check for threads; wait for more feedback"}
+{"at":"2026-11-14T16:36:03.290Z","source":"stop-hook","event":"continue","minutesLeft":384}
+{"at":"2026-11-14T16:52:50.012Z","source":"stop-hook","event":"continue","minutesLeft":367}
+{"at":"2026-11-14T17:24:30.921Z","kst":"2026-11-15 02:24:30 KST","source":"worker","event":"work","current":"COST: user alarmed by OpenAI spend. No more live-model verification unless the user agrees. Verification servers now start without a key; daily cap on model calls added. Running the no-model verification set","next":"rebuild report with cost section; MR; wait for feedback"}
+{"at":"2026-11-14T17:40:52.734Z","kst":"2026-11-15 02:40:52 KST","source":"worker","event":"work","current":"cost root causes fixed (reasoning effort low, no model for button actions, smaller prompts, verification servers keyless); caps removed per user. Now: find why browser verification hangs, then run no-model verification and rebuild report","next":"keep fixing UI issues; MR"}
+{"at":"2026-11-14T17:55:32.034Z","kst":"2026-11-15 02:55:32 KST","source":"worker","event":"verification","note":"no-model verification on final code: 306 passed, 0 failed, 11 runs; cost causes fixed and measured"}
+{"at":"2026-11-14T17:57:05.184Z","kst":"2026-11-15 02:57:05 KST","source":"worker","event":"work","current":"part card moved into the side panel; crew queue only in orbit view. Next: no-model verification, report rebuild, then review remaining screens (lobby, title, MR) for overlap/clutter","next":"commit only if the user asks"}
+{"at":"2026-11-14T18:08:16.797Z","kst":"2026-11-15 03:08:16 KST","source":"worker","event":"verification","note":"no-model verification after UI fixes: 306 passed, 0 failed"}
+{"at":"2026-11-14T18:08:16.882Z","kst":"2026-11-15 03:08:16 KST","source":"worker","event":"work","current":"03:20 verified (306, no model calls), report rebuilt. Uncommitted since e8b1298: chat threads, overlays, autonomous briefs, cost fixes, lean-array sizing","next":"next: MR status for threads; review analysis/design tabs for clutter; final report + message near 08:00"}
+{"at":"2026-11-14T18:20:30.500Z","kst":"2026-11-15 03:20:30 KST","source":"worker","event":"verification","note":"03:40 no-model verification after stage clean-up: 306 passed, 0 failed"}
+{"at":"2026-11-14T18:20:30.585Z","kst":"2026-11-15 03:20:30 KST","source":"worker","event":"work","current":"stage clean-up done (no panels over 3D, labels decluttered); verified 306/0; report rebuilt. Uncommitted since e8b1298","next":"keep reviewing UX by screenshot (design/analysis/review tabs, title), MR; final report and message near 08:00; no live-model runs without need"}
+{"at":"2026-11-14T18:20:40.289Z","source":"stop-hook","event":"continue","minutesLeft":279}
+{"at":"2026-11-14T18:31:23.532Z","kst":"2026-11-15 03:31:23 KST","source":"worker","event":"UI: systems tab line list redesigned (one row per line, no wrapped columns), eclipse tile no longer truncated; full no-model verification 306/306 at 18:31"}
+{"at":"2026-11-14T18:57:58.795Z","kst":"2026-11-15 03:57:58 KST","source":"worker","event":"requirement","id":"R-XR-01","status":"PASS"}
+{"at":"2026-11-14T19:11:16.782Z","kst":"2026-11-15 04:11:16 KST","source":"worker","event":"requirement","id":"R-XR-01","status":"PASS"}
+{"at":"2026-11-14T19:17:54.340Z","kst":"2026-11-15 04:17:54 KST","source":"worker","event":"MR: headset frame capture added; fixed session freeze (controller ray on label sprite), empty panels for solo player, night-side table orientation, label sizes, panel text; full no-model verification 317/317; report rebuilt (23 pages)"}
+{"at":"2026-11-14T19:28:16.016Z","kst":"2026-11-15 04:28:16 KST","source":"worker","event":"full no-model verification 318/318 (12 runs); left column tightened; MR ray sweep check; report rebuilt"}
+{"at":"2026-11-14T19:38:17.433Z","kst":"2026-11-15 04:38:17 KST","source":"worker","event":"MR: own-AI panel added (D-28); full no-model verification 319/319; report rebuilt"}
+{"at":"2026-11-14T19:39:36.750Z","kst":"2026-11-15 04:39:36 KST","source":"worker","event":"live check: one AI-written brief with the variety prompt — playable, wired (reports/evidence/live-brief.md)"}
+{"at":"2026-11-14T20:01:32.106Z","kst":"2026-11-15 05:01:32 KST","source":"worker","event":"layout check at 3 window sizes added (D-29); full no-model verification rerun; report rebuilt"}
+{"at":"2026-11-14T20:16:53.002Z","kst":"2026-11-15 05:16:53 KST","source":"worker","event":"layout check extended (composer visible with a part selected), 15/15; full no-model verification 334/334; report rebuilt"}
+{"at":"2026-11-14T20:19:09.442Z","kst":"2026-11-15 05:19:09 KST","source":"worker","event":"work","current":"MR checked by real headset frames: freeze, empty panels, black Moon, labels fixed; own-AI panel in MR; layouts fixed and checked at 3 window sizes; answer wording; verified by full no-model run. Uncommitted since e8b1298 \\","next":"keep reviewing screens until 08:00; final report rebuild and final message; no live-model runs without need"}
+{"at":"2026-11-14T20:19:14.262Z","kst":"2026-11-15 05:19:14 KST","source":"worker","event":"work","current":"MR checked by real headset frames: freeze, empty panels, black Moon, labels fixed; own-AI panel in MR; layouts fixed and checked at 3 window sizes; answer wording; verified by full no-model run. Uncommitted since e8b1298","next":"keep reviewing screens until 08:00; final report rebuild and final message; no live-model runs without need"}
+{"at":"2026-11-14T20:26:40.850Z","kst":"2026-11-15 05:26:40 KST","source":"worker","event":"full no-model verification 336/336 (13 runs, 159 unit tests); report rebuilt"}
+{"at":"2026-11-14T20:40:07.194Z","kst":"2026-11-15 05:40:07 KST","source":"worker","event":"name tags declutter incl. spacecraft tag; last edge band removed; title copy updated; stale report rows corrected; full no-model verification 336/336; report rebuilt"}
+{"at":"2026-11-14T20:52:44.187Z","kst":"2026-11-15 05:52:44 KST","source":"worker","event":"no-model UI checks added for conversation threads and two-player privacy; full no-model verification 355/355 (15 runs); report rebuilt"}
+{"at":"2026-11-14T21:07:16.030Z","kst":"2026-11-15 06:07:16 KST","source":"worker","event":"English date format everywhere; MR name tags larger and decluttered from the head; full no-model verification 355/355 (15 runs); report rebuilt"}
+{"at":"2026-11-14T21:11:41.812Z","kst":"2026-11-15 06:11:41 KST","source":"worker","event":"requirement","id":"R-XR-01","status":"PASS"}
+{"at":"2026-11-14T21:21:14.704Z","kst":"2026-11-15 06:21:14 KST","source":"worker","event":"MR grab-select-connect checks added; full no-model verification 357/357 (15 runs); report rebuilt"}
+{"at":"2026-11-14T21:33:38.752Z","kst":"2026-11-15 06:33:38 KST","source":"worker","event":"MR spatial keyboard check added; full no-model verification 358/358 (15 runs); report rebuilt"}
+{"at":"2026-11-14T21:48:18.505Z","kst":"2026-11-15 06:48:18 KST","source":"worker","event":"work","current":"All requirements verified except the physical headset (R-XR-03, external). Full no-model verification 363/363 over 15 runs on the final code; report rebuilt. Uncommitted since e8b1298","next":"until 08:00: review only, no risky changes; final report rebuild and final message"}
+{"at":"2026-11-14T21:58:59.180Z","kst":"2026-11-15 06:58:59 KST","source":"worker","event":"final-code full no-model verification 363/363 (15 runs); review-only screenshots git-ignored; report rebuilt"}
+{"at":"2026-11-14T22:01:00.688Z","kst":"2026-11-15 07:01:00 KST","source":"worker","event":"clean-environment run repeated on the final build without a model: 4/4"}
+{"at":"2026-11-14T22:12:54.010Z","kst":"2026-11-15 07:12:54 KST","source":"worker","event":"work","current":"All requirements verified except the physical headset (R-XR-03, external). Full no-model verification 378/378 over 16 runs on the final code (07:1x KST); report rebuilt. Uncommitted since e8b1298","next":"until 08:00: review only; final message at 08:00"}
+{"at":"2026-11-14T22:13:24.670Z","kst":"2026-11-15 07:13:24 KST","source":"worker","event":"D-30 recorded (no-model UI checks); final report rebuilt after 378/378"}
+{"at":"2026-11-14T22:26:30.793Z","kst":"2026-11-15 07:26:30 KST","source":"worker","event":"work","current":"All requirements verified except the physical headset (R-XR-03, external). Full no-model verification 382/382 over 16 runs on the final code; final report rebuilt. Uncommitted since e8b1298","next":"final message at 08:00; no further code changes"}
+{"at":"2026-11-14T22:28:16.746Z","kst":"2026-11-15 07:28:16 KST","source":"worker","event":"docs: live-model recheck gap stated in report §14 and README; README explains run-one (no model by default)"}
+{"at":"2026-11-14T22:31:08.126Z","kst":"2026-11-15 07:31:08 KST","source":"worker","event":"soak repeated with 2000 edits / 20 flights: 6/6, all four clients end identical (reports/evidence/soak-2000.md)"}
+{"at":"2026-11-14T22:33:09.116Z","kst":"2026-11-15 07:33:09 KST","source":"worker","event":"play-throughs repeated with 3 more seeds per mission (9/9 checks each; outcomes: 4 success, 1 partial, 4 not ready with the fixed minimal line of play) — reports/evidence/play-extra-seeds.md"}
+{"at":"2026-11-14T22:34:58.058Z","kst":"2026-11-15 07:34:58 KST","source":"worker","event":"report: picture timing note, final-layout picture, reproduction steps updated; rebuilt (28 pages)"}
+{"at":"2026-11-14T22:45:27.944Z","kst":"2026-11-15 07:45:27 KST","source":"worker","event":"work","current":"All requirements verified except the physical headset (R-XR-03, external). Full no-model verification 382/382 over 16 runs, twice in a row on the final code (07:16 and 07:35 KST); final report built (PDF + md). Uncommitted since e8b1298","next":"final message at 08:00; commit and push only if the user asks"}
+{"at":"2026-11-14T22:45:40.986Z","kst":"2026-11-15 07:45:40 KST","source":"worker","event":"final: 382/382 twice in a row on the final code; final report built 07:45 KST (28 pages); commit/push left to the user"}
+{"at":"2026-11-14T23:00:38.335Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T01:07:49.859Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T01:10:07.023Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T01:55:32.953Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T02:04:08.858Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T02:05:30.048Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T02:07:02.201Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T02:13:36.679Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T02:28:43.053Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T02:31:44.344Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T02:35:17.853Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T02:50:06.454Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T03:01:39.425Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T03:19:04.518Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T04:13:13.664Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T04:20:16.151Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T04:22:42.013Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T04:29:26.016Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T04:34:56.648Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T04:39:20.615Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T04:42:29.090Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T05:20:10.375Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T05:28:29.998Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T05:46:15.637Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T05:53:58.359Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T06:21:36.840Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T06:28:49.364Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T06:45:23.006Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T07:16:09.891Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T07:23:18.235Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}
+{"at":"2026-11-15T07:29:31.598Z","source":"stop-hook","event":"allow-stop","why":"end time reached"}

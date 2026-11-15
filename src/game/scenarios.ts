@@ -7,6 +7,7 @@
  * seed always yields the same mission (fair leaderboards) while different seeds vary the
  * budget, mass allocation, launch date and a programme complication.
  */
+import { simulateMission } from "./simulation.js";
 import { prewire } from "../systems/graph.js";
 import type { z } from "zod";
 import type { DisciplineId } from "../nasa/lifecycle.js";
@@ -42,7 +43,16 @@ export interface CatalogItem {
   description: string;
   /** Component template; the id is assigned when it is added to a mission. */
   component: Omit<Component, "id">;
+  /** "advanced" parts do more and ask more (mass, power, money, care); the others are the simple ones. Set when listed for a crew. */
+  tier?: "simple" | "advanced";
 }
+
+/**
+ * The advanced parts: the larger, hungrier or more demanding choice where a simpler one exists. At Cadet level a
+ * crew is offered the simple parts (and whatever its mission's kit lays out); at Engineer and Chief level, all of them.
+ */
+export const ADVANCED_PARTS = new Set(["sa-2", "bat-1000", "hga-ka", "nac", "gpr", "lola", "irs", "adcs-fine", "obc-store", "cs-x"]);
+export const tierOf = (itemId: string): "simple" | "advanced" => (ADVANCED_PARTS.has(itemId) ? "advanced" : "simple");
 
 export type Difficulty = "cadet" | "engineer" | "chief";
 
@@ -342,7 +352,30 @@ export function generateMission(scenarioId: string, seed: number, difficulty: Di
   ];
   // A power system that is short once the instruments are on: a bigger array (and a bigger line), a battery, a different
   // orbit plane, or onboard logic that sheds load in the dark season are all ways through, each with its own cost.
-  complications.push({ id: "lean-array", title: "Descoped solar array", description: "A deployment hinge was cut from the design: the solar array delivered is half the planned size. With the instruments running, power will be short in the long-shadow season.", apply: () => { for (const c of cfg.spacecraft.components) if (c.type === "solar_panel") { c.areaM2 = round(c.areaM2 * 0.5, 0.01); c.massKg = round(c.massKg * 0.5, 0.01); } } });
+  complications.push({
+    id: "lean-array",
+    title: "Descoped solar array",
+    description: "A deployment hinge was cut from the design: the solar array delivered is much smaller than planned. With the instruments running, power will be short in the long-shadow season.",
+    apply: () => {
+      // The array is sized from this mission's own year: fly the planned design, read how generation swings with the
+      // seasons, and cut the array so that — with a typical payload on (about 13% more load) — the worst season falls
+      // 10% short while the best season still covers the load. The problem is then real whatever orbit and date were drawn.
+      const planned = parseMissionConfig(structuredClone(cfg));
+      let factor = 0.5;
+      if (planned.ok) {
+        const year = simulateMission(planned.config).timeline;
+        const load = Math.max(...year.map((t) => t.generationW - t.marginW)) * 1.13;
+        const worst = Math.min(...year.map((t) => t.generationW));
+        const best = Math.max(...year.map((t) => t.generationW));
+        if (worst > 0 && load > 0) {
+          factor = (0.9 * load) / worst;
+          if (best * factor < 1.03 * load) factor = (1.03 * load) / best; // a year with little swing: short most of it, never all of it
+          factor = Math.min(0.95, Math.max(0.15, factor));
+        }
+      }
+      for (const c of cfg.spacecraft.components) if (c.type === "solar_panel") { c.areaM2 = Math.max(0.01, round(c.areaM2 * factor, 0.01)); c.massKg = round(c.massKg * factor, 0.01); }
+    },
+  });
   if (cfg.rover) complications.push({ id: "steep-site", title: "Steeper landing site", description: "New terrain data puts the rover's route on a steeper slope.", apply: () => { cfg.rover!.site.slopeDeg = round(14 + random() * 5, 0.5); } });
   const drawable = complications.filter((c) => c.id !== "lean-array");
   const drawn = difficulty === "cadet" ? complications[0]! : drawable[Math.floor(random() * drawable.length)]!;

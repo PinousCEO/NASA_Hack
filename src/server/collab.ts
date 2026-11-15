@@ -46,6 +46,8 @@ export class CollabHub {
   private nextClient = 1;
   /** The moment each mission's crew is looking at: shared so everyone sees the same sky. Not part of the design. */
   private readonly clocks = new Map<string, { timeMs: number; rate: number; at: number; by: string }>();
+  /** The last messages the crew of each mission sent one another (not stored on disk). */
+  private readonly chats = new Map<string, { id: string; accountId: string; displayName: string; color: string; mode: string; text: string; at: number }[]>();
 
   constructor(
     private readonly platform: Platform,
@@ -120,14 +122,14 @@ export class CollabHub {
     session.on("mission", (version, cause) => {
       const author = session.member(cause.by);
       // Configuration, recalculated results, constraint status and score travel together.
-      this.broadcast(session, { type: "mission.version", mission: version, checks: session.checks(), evaluation: session.evaluate(), maturity: session.maturity(), cause: { ...cause, displayName: author?.displayName ?? cause.by } });
+      this.broadcast(session, { type: "mission.version", mission: version, checks: session.checks(), evaluation: session.evaluate(), maturity: session.maturity(), roles: session.roleWatches(), cause: { ...cause, displayName: author?.displayName ?? cause.by } });
     });
-    session.on("game", (game) => this.broadcast(session, { type: "game.updated", game, evaluation: session.evaluate(), maturity: session.maturity() }));
+    session.on("game", (game) => this.broadcast(session, { type: "game.updated", game, evaluation: session.evaluate(), maturity: session.maturity(), roles: session.roleWatches() }));
     session.on("members", (members) => this.broadcast(session, { type: "members.updated", members, presence: this.roster(session) }));
     session.on("locks", (locks) => this.broadcast(session, { type: "locks.updated", locks }));
     session.on("request", (r) => {
       // The owner (and everyone, once shared) gets the conversation; the rest of the crew gets only what reached the shared world.
-      const full = JSON.stringify({ type: "request.updated", request: { id: r.id, text: r.text, status: r.status, user: r.user, createdAt: r.createdAt, updatedAt: r.updatedAt, shared: r.shared === true, summary: r.requirement?.summary, feasibility: r.feasibility?.classification, tasks: r.plan?.tasks.map((t) => ({ id: t.id, capabilityId: t.executedBy ?? t.capabilityId, status: t.status })), proposalId: r.proposalId, error: r.error, answer: r.answer, queuePosition: r.queuePosition, traceLength: r.trace.length } });
+      const full = JSON.stringify({ type: "request.updated", request: { id: r.id, text: r.text, topic: r.topic, action: r.action === true, status: r.status, user: r.user, createdAt: r.createdAt, updatedAt: r.updatedAt, shared: r.shared === true, summary: r.requirement?.summary, feasibility: r.feasibility?.classification, tasks: r.plan?.tasks.map((t) => ({ id: t.id, capabilityId: t.executedBy ?? t.capabilityId, status: t.status })), proposalId: r.proposalId, error: r.error, answer: r.answer, queuePosition: r.queuePosition, traceLength: r.trace.length } });
       const stub = JSON.stringify({ type: "request.updated", request: redacted(r) });
       for (const peer of this.peers) {
         if (peer.session === session && peer.ws.readyState === WebSocket.OPEN) peer.ws.send(visibleTo(r, peer.account.id) ? full : stub);
@@ -164,7 +166,7 @@ export class CollabHub {
       this.broadcast(session, { type: "presence.left", clientId: peer.clientId, presence: this.roster(session) });
     });
     ws.on("error", () => ws.terminate());
-    this.send(peer, { type: "welcome", you: { clientId: peer.clientId, accountId: account.id, color: peer.color, role: session.member(account.id)?.role }, ...session.snapshot(), clock: this.clocks.get(session.meta.id) ?? null, presence: this.roster(session), resumed: false, missed: [] });
+    this.send(peer, { type: "welcome", you: { clientId: peer.clientId, accountId: account.id, color: peer.color, role: session.member(account.id)?.role }, ...session.snapshot(), clock: this.clocks.get(session.meta.id) ?? null, chat: this.chats.get(session.meta.id) ?? [], presence: this.roster(session), resumed: false, missed: [] });
     this.broadcast(session, { type: "presence.joined", presence: this.roster(session) }, peer);
   }
 
@@ -192,7 +194,7 @@ export class CollabHub {
         const last = typeof msg.lastVersion === "number" ? msg.lastVersion : 0;
         if (msg.mode === "xr" || msg.mode === "desktop") peer.mode = msg.mode;
         const missed = last > 0 ? session.store.list().filter((v) => v.version > last).map((v) => ({ version: v.version, by: session.member(v.publishedBy)?.displayName ?? v.publishedBy, note: v.note, changedPaths: v.changedPaths ?? [] })) : [];
-        this.send(peer, { type: "welcome", you: { clientId: peer.clientId, accountId: account.id, color: peer.color, role: session.member(account.id)?.role }, ...session.snapshot(), clock: this.clocks.get(session.meta.id) ?? null, presence: this.roster(session), resumed: last > 0, missed });
+        this.send(peer, { type: "welcome", you: { clientId: peer.clientId, accountId: account.id, color: peer.color, role: session.member(account.id)?.role }, ...session.snapshot(), clock: this.clocks.get(session.meta.id) ?? null, chat: this.chats.get(session.meta.id) ?? [], presence: this.roster(session), resumed: last > 0, missed });
         this.broadcast(session, { type: "presence.joined", presence: this.roster(session) }, peer);
         return;
       }
@@ -224,9 +226,23 @@ export class CollabHub {
         const hands = msg.hands as { left?: unknown; right?: unknown } | undefined;
         if (hands && typeof hands === "object" && isPose(hands.left ?? null) && isPose(hands.right ?? null)) next.hands = { left: hands.left ?? null, right: hands.right ?? null };
         if (msg.focus === null || (typeof msg.focus === "string" && msg.focus.length <= 200)) next.focus = msg.focus;
+        // A place on the world this crew member is pointing at: [latitude, east longitude] in degrees, or null.
+        const point = msg.point;
+        if (point === null || (Array.isArray(point) && point.length === 2 && point.every((n) => typeof n === "number" && Number.isFinite(n)) && Math.abs(point[0] as number) <= 90 && Math.abs(point[1] as number) <= 360)) next.point = point;
         if (msg.mode === "xr" || msg.mode === "desktop") peer.mode = msg.mode;
         peer.presence = { ...peer.presence, ...next };
         this.broadcast(session, { type: "presence.update", clientId: peer.clientId, accountId: account.id, color: peer.color, mode: peer.mode, displayName: account.displayName, ...peer.presence }, peer);
+        return;
+      }
+      case "say": {
+        // A short message to the crew: relayed to everyone in the mission and kept (the last thirty) for those who join later.
+        const text = typeof msg.text === "string" ? msg.text.replace(/\s+/g, " ").trim().slice(0, 240) : "";
+        if (!text) return;
+        const message = { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, accountId: account.id, displayName: account.displayName, color: peer.color, mode: peer.mode, text, at: Date.now() };
+        const log = this.chats.get(session.meta.id) ?? [];
+        log.push(message);
+        this.chats.set(session.meta.id, log.slice(-30));
+        this.broadcast(session, { type: "crew.say", message });
         return;
       }
       case "clock": {

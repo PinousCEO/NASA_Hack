@@ -199,6 +199,8 @@ export interface Planet {
   globe: THREE.Mesh;
   /** Set the Sun direction in world space. */
   setSun(direction: THREE.Vector3): void;
+  /** How bright the unlit side is, as a share of the surface colour (a small table-top model needs more than a full-screen view). */
+  setNightFloor(share: number): void;
   update(dt: number): void;
   /** Resolves true once NASA imagery is on screen, false if only the procedural surface is available. */
   ready: Promise<boolean>;
@@ -219,6 +221,7 @@ export function createPlanet(body: BodyId, options: { quality?: Quality; detail?
     uTex: { value: 0 }, uReliefOn: { value: 0 }, uNightOn: { value: 0 },
     uEarth: { value: body === "earth" ? 1 : 0 }, uMars: { value: body === "mars" ? 1 : 0 }, uAirless: { value: body === "moon" ? 1 : 0 },
     uTime: { value: 0 }, uClouds: { value: blank as THREE.Texture }, uCloudOn: { value: 0 },
+    uFloor: { value: 0.006 },
   };
   const material = new THREE.ShaderMaterial({
     uniforms,
@@ -228,7 +231,7 @@ export function createPlanet(body: BodyId, options: { quality?: Quality; detail?
     fragmentShader: /* glsl */ `precision highp float;
       varying vec3 vObj; varying vec3 vN; varying vec3 vW; varying vec3 vAxis; varying vec2 vUv;
       uniform vec3 uSun, uA; uniform sampler2D uAlbedo, uRelief, uNight;
-      uniform sampler2D uClouds; uniform float uTex, uReliefOn, uNightOn, uEarth, uMars, uAirless, uTime, uCloudOn;
+      uniform sampler2D uClouds; uniform float uTex, uReliefOn, uNightOn, uEarth, uMars, uAirless, uTime, uCloudOn, uFloor;
       void main(){
         vec3 p = normalize(vObj);
         vec3 N = normalize(vN);
@@ -266,7 +269,7 @@ export function createPlanet(body: BodyId, options: { quality?: Quality; detail?
         lit = mix(lit, lit * vec3(0.72, 0.84, 1.08) + vec3(0.02, 0.05, 0.11) * dayAir, uEarth * 0.35 * (1.0 - cover));
         lit += uMars * vec3(0.85, 0.5, 0.3) * rim * dayAir * 0.55;
         // A faint floor so the night side reads as a body, not a hole (earthshine / starlight).
-        lit += albedo * 0.006;
+        lit += albedo * uFloor;
         gl_FragColor = vec4(lit, 1.0);
         ${OUTPUT}
       }`,
@@ -350,6 +353,7 @@ export function createPlanet(body: BodyId, options: { quality?: Quality; detail?
     group,
     globe,
     setSun: (direction) => uniforms.uSun.value.copy(direction).normalize(),
+    setNightFloor: (share) => { uniforms.uFloor.value = share; },
     update(dt) {
       uniforms.uTime.value += dt;
       if (fading && fade < 1) {
@@ -516,6 +520,7 @@ export function createSun(): THREE.Group {
   const group = new THREE.Group();
   group.name = "sun";
   const glare = new THREE.Sprite(new THREE.SpriteMaterial({ map: sunGlare(), color: new THREE.Color(3.2, 3.0, 2.7), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+  glare.raycast = () => undefined; // decoration: never a pointer target
   glare.material.userData.shared = true; // the glare texture is reused by every Sun
   glare.scale.setScalar(2.4);
   const disc = new THREE.Mesh(new THREE.SphereGeometry(0.07, 24, 12), new THREE.MeshBasicMaterial({ color: new THREE.Color(14, 13, 11) }));
@@ -731,6 +736,13 @@ export function createLabel(text: string, options: { color?: string; height?: nu
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false, depthTest: false, toneMapped: false }));
   const height = options.height ?? 0.12;
   sprite.scale.set((height * w) / h, height, 1);
+  sprite.userData.labelBase = [(height * w) / h, height];
+  // A sprite can only be hit-tested by a ray that knows its camera. A headset's controller ray has none, and
+  // three.js then throws inside the frame loop, which stops the session's rendering for good. Such rays pass through.
+  sprite.raycast = function (raycaster: THREE.Raycaster, intersects: THREE.Intersection[]): void {
+    if (!raycaster.camera) return;
+    THREE.Sprite.prototype.raycast.call(this, raycaster, intersects);
+  };
   sprite.renderOrder = 10;
   return sprite;
 }

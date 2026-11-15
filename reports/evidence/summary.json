@@ -1,0 +1,153 @@
+{
+  "started": "2026-11-15 16:15:50 KST",
+  "finished": "2026-11-15 16:28:30 KST",
+  "head": "e8b1298",
+  "rows": [
+    {
+      "label": "Unit and integration tests",
+      "kind": "code level; language model is a test double",
+      "passed": 159,
+      "failed": 0,
+      "ok": true,
+      "seconds": 10
+    },
+    {
+      "label": "Browser end-to-end suite",
+      "kind": "real browser, own fresh server, no language model, XR in the IWER emulator",
+      "passed": 51,
+      "failed": 0,
+      "ok": true,
+      "seconds": 192
+    },
+    {
+      "label": "Wiring loop in the UI",
+      "kind": "real browser",
+      "passed": 9,
+      "failed": 0,
+      "ok": true,
+      "seconds": 28
+    },
+    {
+      "label": "Power-short mission: flight with control logic in the UI",
+      "kind": "real browser",
+      "passed": 8,
+      "failed": 0,
+      "ok": true,
+      "seconds": 12
+    },
+    {
+      "label": "Soak: four clients, 600 edits",
+      "kind": "four real HTTP+WebSocket clients",
+      "passed": 6,
+      "failed": 0,
+      "ok": true,
+      "seconds": 14
+    },
+    {
+      "label": "Controls scan (labels, reasons for disabled)",
+      "kind": "real browser, two roles",
+      "passed": 18,
+      "failed": 0,
+      "ok": true,
+      "seconds": 40
+    },
+    {
+      "label": "Four clients: sync, latency, conflicts, reconnect",
+      "kind": "four real HTTP+WebSocket clients",
+      "passed": 17,
+      "failed": 0,
+      "ok": true,
+      "seconds": 3
+    },
+    {
+      "label": "Conversation: grows downward, a thread per part, nothing over the stage",
+      "kind": "real browser, built-in analyser (no language model)",
+      "passed": 10,
+      "failed": 0,
+      "ok": true,
+      "seconds": 28
+    },
+    {
+      "label": "One player, first screen to debrief, by clicking",
+      "kind": "real browser, built-in analyser (no language model)",
+      "passed": 15,
+      "failed": 0,
+      "ok": true,
+      "seconds": 42
+    },
+    {
+      "label": "Two players: private conversations, sharing, personal view",
+      "kind": "two real browsers, built-in analyser (no language model)",
+      "passed": 9,
+      "failed": 0,
+      "ok": true,
+      "seconds": 26
+    },
+    {
+      "label": "Layout at four window sizes (stage stays visible)",
+      "kind": "real browser",
+      "passed": 24,
+      "failed": 0,
+      "ok": true,
+      "seconds": 100
+    },
+    {
+      "label": "Two players: pointing at a place, crew feed, game strip",
+      "kind": "real browser",
+      "passed": 12,
+      "failed": 0,
+      "ok": true,
+      "seconds": 25
+    },
+    {
+      "label": "One person and three AI crewmates, to a flown mission",
+      "kind": "real browser, no language model",
+      "passed": 9,
+      "failed": 0,
+      "ok": true,
+      "seconds": 84
+    },
+    {
+      "label": "Web ↔ MR loop",
+      "kind": "real browser + WebXR emulator (IWER)",
+      "passed": 13,
+      "failed": 0,
+      "ok": true,
+      "seconds": 28
+    },
+    {
+      "label": "MR headset frame (what the session draws)",
+      "kind": "real browser + WebXR emulator (IWER)",
+      "passed": 19,
+      "failed": 0,
+      "ok": true,
+      "seconds": 53
+    },
+    {
+      "label": "Play-through: CubeSat",
+      "kind": "server API, no language model",
+      "passed": 9,
+      "failed": 0,
+      "ok": true,
+      "seconds": 1
+    },
+    {
+      "label": "Play-through: Mars orbiter",
+      "kind": "server API, no language model",
+      "passed": 9,
+      "failed": 0,
+      "ok": true,
+      "seconds": 1
+    },
+    {
+      "label": "Play-through: lunar prospector",
+      "kind": "server API, no language model",
+      "passed": 9,
+      "failed": 0,
+      "ok": true,
+      "seconds": 1
+    }
+  ],
+  "total": 406,
+  "failed": 0
+}

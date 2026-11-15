@@ -154,6 +154,9 @@ describe("each crew member's own AI", () => {
     seen.length = 0;
     await ben.api("POST", `/api/sessions/${sid}/requests`, { text: "what should I look at first?", wait: true });
     expect(seen.find((s) => s.system.includes("structured operations"))!.prompt).toContain(`Their seat: ${seats[1]} — `);
+    // Every character sent to the model is paid for: the whole request (rules + mission + results + catalogue + flight) stays small.
+    const sent = seen.find((x) => x.system.includes("structured operations"))!;
+    expect(sent.system.length + sent.prompt.length).toBeLessThan(34000);
     // Both read the same shared world.
     expect(benPrompt).toMatch(/"systems":\{"wired":true/);
   });

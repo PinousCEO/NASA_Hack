@@ -18,7 +18,7 @@ Node 22 이상. 첫 번째로 가입한 계정이 플랫폼 관리자가 됩니�
 
 | 명령 | 내용 |
 |---|---|
-| `npm test` | 단위·통합 테스트 153개 (JPL Horizons·NASA PDS·영상 타일 실연동, MCP 왕복, 4인 협업, TLS 포함) |
+| `npm test` | 단위·통합 테스트 159개 (JPL Horizons·NASA PDS·영상 타일 실연동, MCP 왕복, 4인 협업, TLS 포함) |
 | `npm run e2e` | 실제 브라우저(Edge/Chrome) E2E 51개 — XR 에뮬레이션 포함. 먼저 `build:web` 필요 |
 | `npm run typecheck` | 서버 + 웹 타입 검사 |
 | `npm run dev:web` | 프런트엔드 개발 서버(3000). `ALLOWED_ORIGINS=http://localhost:3000`, `NEXT_PUBLIC_CORE_ORIGIN=http://127.0.0.1:8787` 설정 |
@@ -154,7 +154,7 @@ tests/               vitest 8개 파일 + tests/e2e (Playwright)
 - **AI가 제어 로직을 만든다.** "전력이 모자라면 관측을 줄였다가 회복되면 되돌려" 같은 문장에서 온보드 규칙(`WHEN 조건 → 대상에 값`), 기억 변수, 다운링크 우선순위가 만들어지고, 비행 시뮬레이션의 매일 실행되어 결과를 바꾼다. 규칙은 자체 파서로 해석하며 `eval`을 쓰지 않는다. 제안 전에 같은 조건으로 전후 비행을 비교한다. (`src/systems/controller.ts`, `src/systems/expr.ts`)
 - **각자의 AI.** 플레이어마다 대화 문맥이 따로 있고, 대화는 본인이 공유하기 전까지 비공개다. 공유 세계에 반영되는 변경은 모두가 본다. 아이디어에는 판정이 붙는다 — 만들어 측정함 / 조건부 / 성립하지 않음 / 모델 범위 밖. 성립하지 않은 아이디어는 이유와 함께 남아 공유할 수 있다.
 - **임무가 성립하는가가 먼저.** 과학 수행 가능 · 한도 위반 없음 · 발사 가능 · 비행에서 데이터 회수 — 네 조건과 근거가 점수보다 위에 나온다. 판정 기준은 게임 규칙으로 명시된다.
-- **Web과 MR은 같은 임무.** 헤드셋 상태 패널과 빠른 명령이 같은 설계 상태를 따른다(미연결 부품 연결, 비행 등).
+- **Web과 MR은 같은 임무.** 헤드셋 상태 패널과 빠른 명령이 같은 설계 상태를 따른다(미연결 부품 연결, 비행 등). 헤드셋에서 한 질문의 답은 탁자 위의 "내 AI" 패널에 나온다. 세션이 시작될 때 탁자는 낮 쪽이 플레이어를 향하도록 한 번 돌려 놓인다.
 
 자율적으로 추가한 결정과 이유는 `docs/ADDED_DECISIONS.md`, 요구사항별 상태와 증거는 `requirements.json`과 `reports/`에 있다.
 
@@ -164,23 +164,29 @@ tests/               vitest 8개 파일 + tests/e2e (Playwright)
 
 | 검증 | 명령 | 결과 |
 |---|---|---|
-| 단위·통합 테스트 (언어 모델은 테스트 더블) | `npm test` | 153개 통과 |
+| 단위·통합 테스트 (언어 모델은 테스트 더블) | `npm test` | 159개 통과 |
 | 브라우저 E2E (Edge, 새 서버, XR은 IWER 에뮬레이터) | `npm run e2e` | 51 / 51 |
 | 전체 재실행 (위 항목 모두) | `node reports/tools/run-all-evidence.mjs` | 요약: `reports/evidence/summary.md` |
 | 배선 UI 흐름 | `node reports/tools/ui-systems.mjs` | 9 / 9 |
 | 2인 UI + 개인 AI (실제 모델) | `node reports/tools/ui-crew.mjs` | 12 / 12 |
 | 1인 전체 흐름: 정의→제출 (실제 모델) | `node reports/tools/ui-fullflow.mjs` | 16 / 16 |
-| 4 클라이언트 동기화·지연 | `node reports/tools/fourclients.mjs` | 18 / 18, 루프백 지연 중앙값 4.3 ms |
+| 4 클라이언트 동기화·지연 | `node reports/tools/fourclients.mjs` | 17 / 17 (지연 수치는 `reports/evidence/four-clients.md`) |
 | Web ↔ MR (에뮬레이터) | `node reports/tools/xr-loop.mjs` | 13 / 13 |
+| MR 헤드셋이 실제로 그리는 프레임·부품 집기·연결·내 AI (에뮬레이터) | `node reports/tools/xr-frame.mjs` | 16 / 16 |
+| 창 크기별 레이아웃 (1280×720 · 1366×768 · 1536×864 · 1920×1080) | `node reports/tools/ui-layout.mjs` | 24 / 24 |
+| 대화방: 아래로 쌓임·부품별 분리·겹침 없음 (모델 없이) | `node reports/tools/ui-chat.mjs --no-model` | 10 / 10 |
+| 2인 비공개 대화·공유·개인 시점 (모델 없이) | `node reports/tools/ui-private.mjs` | 9 / 9 |
+| 1인 전체 흐름: 첫 화면 → 제출·디브리프 (모델 없이) | `node reports/tools/ui-fullflow.mjs --no-model` | 15 / 15 |
 | 다른 조건 미션 플레이스루 | `node reports/tools/play-mission.mjs leo-cubesat` 등 | 큐브샛·화성 각 9 / 9 |
 | 실제 모델 대화 | `node reports/tools/live-ai.mjs <이름> -- "질문" …` | 제어기로 전력 부족일 155→0 등 |
 
-증거 스크립트는 실행 중인 서버(`npm run dev`)를 대상으로 하며, 계정을 새로 만들기 때문에 연달아 여러 개를 돌리면 로그인 시도 제한(429)에 걸릴 수 있다. 그때는 서버를 재시작한다.
+증거 스크립트 하나만 돌릴 때는 `node reports/tools/run-one.mjs reports/tools/<스크립트>.mjs`를 쓴다. 빈 데이터 폴더로 새 서버를 띄워 실행하고 끝나면 지운다. 이 서버는 **언어 모델 없이** 뜨므로 과금이 없다(`run-all-evidence.mjs`도 같다). 실제 모델을 쓰는 검사는 `--live`를 붙였을 때만 돌고 `.env`의 키로 요청이 발생한다. 실행 중인 서버(`npm run dev`)에 직접 돌리면 계정을 새로 만들기 때문에 로그인 시도 제한(429)에 걸릴 수 있다.
 
 **검증하지 못한 것**
 - **실물 헤드셋**: 이 프로젝트의 MR 검증은 모두 WebXR 에뮬레이터(IWER)에서 했다. 실제 추적, 패스스루, 손 추적, 기기 프레임률, 착용 편의성, 같은 방에서의 공간 정렬은 미확인이다.
 - **GMAT**: `gmat.run`은 실제 GMAT으로 실행해 보지 못했다. 리포트 가져오기는 GMAT ReportFile 형식의 자체 전파 결과로 테스트했다.
 - **실제 네트워크 지연**: 지연 수치는 같은 PC 루프백 값이다.
+- **최종 코드 + 실제 언어 모델의 전체 흐름**: 실제 모델을 쓰는 UI 검사 3종은 2026-11-15 01:01–01:32에 마지막으로 통과했다. 그 뒤의 변경(비용 수정, 화면 배치, MR)은 모델 없는 검사와 실제 모델 단건 4회로만 확인했다. 다시 확인하려면 `node reports/tools/run-all-evidence.mjs --live`.
 
 **알려진 한계**
 - 제어 로직은 하루 1회 실행되는 일 평균 모델이다. 한 궤도 안의 통신 창 단위 스케줄링은 안테나 가동률로 근사한다.

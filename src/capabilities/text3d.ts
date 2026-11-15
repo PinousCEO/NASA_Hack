@@ -195,7 +195,7 @@ export function text3dCapabilities(deps: { llm: LlmService }): Capability[] {
       description: "Turn a text description into a 3D model: a language model (or, without one, a keyword composer limited to common spacecraft parts) writes a bounded program of primitives, which is compiled to a validated GLB, staged, and placed in the scene. Produces engineering mock-ups, not sculpted meshes.",
       category: "asset_generation",
       provides: ["asset.generative"],
-      input: z.object({ prompt: z.string().min(3).max(600), placeInScene: z.boolean().default(true) }),
+      input: z.object({ prompt: z.string().min(3).max(1200), placeInScene: z.boolean().default(true) }),
       output: z.object({ assetId: z.string(), uri: z.string(), triangles: z.number(), bytes: z.number(), sha256: z.string(), title: z.string(), partCount: z.number(), method: z.enum(["llm_shape_program", "keyword_composition"]), notes: z.string(), sceneNodeId: z.string().nullable() }),
       requiredPermissions: ["asset:write"],
       constraints: { effect: "draft_write", idempotent: false, timeoutMs: 180000, maxRetries: 1 },

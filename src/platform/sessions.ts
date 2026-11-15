@@ -11,6 +11,7 @@
  * Every state change publishes a new mission version (configuration + recalculated
  * results); clients never receive visual-only updates.
  */
+import { compactJson } from "../pipeline/requirements.js";
 import { harnessPatches, portsOf, standardLinks } from "../systems/graph.js";
 import { SIGNALS, TARGET_FORMS } from "../systems/controller.js";
 import { createHash, randomBytes } from "node:crypto";
@@ -20,10 +21,10 @@ import path from "node:path";
 import { applyPatches, getPath, type PatchOp, pathsOverlap } from "../core/paths.js";
 import { type Role, ROLE_PERMISSIONS, type User } from "../core/types.js";
 import { flightEvents } from "../game/events.js";
-import { type CatalogItem, type Difficulty, FULL_CATALOG, generateMission, getScenario, instantiateCatalogItem, type Objective, type Scenario } from "../game/scenarios.js";
-import { type Evaluation, evaluateMission } from "../game/scoring.js";
+import { type CatalogItem, type Difficulty, FULL_CATALOG, generateMission, getScenario, instantiateCatalogItem, type Objective, type Scenario , tierOf } from "../game/scenarios.js";
+import { type Evaluation, evaluateMission , roleWatch, type RoleWatch } from "../game/scoring.js";
 import { type MissionSimulation, simulateMission } from "../game/simulation.js";
-import { type BriefService, kitFor, type MissionBrief, type ProblemKit } from "../game/briefs.js";
+import { type BriefService, kitFor, type MissionBrief, missionObjectives, type MissionWorld, type ProblemKit } from "../game/briefs.js";
 import type { KnowledgeBase } from "../knowledge/knowledge.js";
 import type { LlmService } from "../llm/llm.js";
 import type { MemoryKind, ResearchMemory } from "../memory/memory.js";
@@ -133,6 +134,8 @@ export interface SessionMeta {
   brief?: { id: string; title: string; problem: string; whyItMatters: string; scienceQuestions: string[]; origin: "ai" | "built_in"; modelId?: string };
   /** The kit built with the problem: the controls that matter, the parts worth reaching for, a split of the work. */
   kit?: ProblemKit;
+  /** This mission's own world: its spacecraft's name, the place it is about, its goals in its own words. */
+  world?: MissionWorld;
   scenarioId: string;
   /** campaign: fixed programme limits, phase gates, ranked. sandbox: everything adjustable, unranked. */
   mode?: "campaign" | "sandbox";
@@ -195,7 +198,12 @@ export interface SessionDeps {
   dataDir: string | null;
   /** Scratch directory for draft staging when dataDir is null. */
   scratchDir: string;
+  /** Is this the id of a mission that exists here? (Set by the session manager; used to cite only crews that can be looked up.) */
+  knownSession?: (id: string) => boolean;
 }
+
+/** Something a crew before this one found out on the same kind of mission. Never anything from a private conversation. */
+export interface Lesson { kind: string; text: string; mission: string; at: string }
 
 export interface SessionEvents {
   mission: [MissionVersion, { by: string; kind: "edit" | "proposal" | "rollback"; summary: string }];
@@ -222,7 +230,11 @@ export class MissionSession extends EventEmitter<SessionEvents> {
     super();
     const scenario = getScenario(meta.scenarioId);
     if (!scenario) throw new SessionError(`Unknown scenario "${meta.scenarioId}"`, 404);
-    this.scenario = scenario;
+    // A mission started from a brief that has since been given a world of its own takes it on.
+    if (!meta.world && meta.brief?.id) { const w = deps.briefs?.get(meta.brief.id)?.world; if (w) meta.world = w; }
+    // The mission's goals carry its own titles and its own thresholds (its place, the detail and data it needs);
+    // what each one measures is the template's.
+    this.scenario = meta.world ? { ...scenario, objectives: missionObjectives(scenario.id, scenario.objectives, meta.world) } : scenario;
     this.dir = deps.dataDir ? path.join(deps.dataDir, "sessions", meta.id) : null;
     this.store = new MissionStore(this.dir ? path.join(this.dir, "mission") : null);
     if (this.store.isEmpty) {
@@ -258,16 +270,47 @@ export class MissionSession extends EventEmitter<SessionEvents> {
     writeFileSync(path.join(this.dir, "session.json"), JSON.stringify(this.meta, null, 2));
   }
 
+  private lessonCache: { at: number; lessons: Lesson[]; records: number } | null = null;
+  /**
+   * What the platform has learned so far that bears on this mission: the outcomes, flights, trade studies and failed
+   * ideas of other crews on the same kind of mission, newest first. This is the growing record every player's AI
+   * reads before it answers (see aiContext): the more missions are played, the more it has to go on. It is retrieval
+   * from the research archive, not training of the language model. Private conversations are never included.
+   */
+  knowledge(limit = 6): { lessons: Lesson[]; records: number } {
+    const now = Date.now();
+    if (this.lessonCache && now - this.lessonCache.at < 20000) return { lessons: this.lessonCache.lessons.slice(0, limit), records: this.lessonCache.records };
+    const mine = `session:${this.meta.id}`;
+    const kinds = new Set(["mission_outcome", "simulation_result", "failure", "trade_study", "hypothesis"]);
+    const all = this.deps.memory.all();
+    const perKind = new Map<string, number>();
+    const lessons: Lesson[] = [];
+    for (let i = all.length - 1; i >= 0 && lessons.length < 12; i--) {
+      const r = all[i]!;
+      if (r.visibility || !kinds.has(r.kind) || !r.tags.includes(this.meta.scenarioId) || r.tags.includes(mine)) continue;
+      const sid = r.tags.find((t) => t.startsWith("session:"))?.slice(8);
+      if (!sid || (this.deps.knownSession && !this.deps.knownSession(sid))) continue;
+      if ((perKind.get(r.kind) ?? 0) >= 3) continue; // a spread of kinds, not twelve flights
+      perKind.set(r.kind, (perKind.get(r.kind) ?? 0) + 1);
+      lessons.push({ kind: r.kind, text: r.summary.replace(/\s+/g, " ").slice(0, 260), mission: r.missionName, at: r.createdAt });
+    }
+    this.lessonCache = { at: now, lessons, records: all.filter((r) => !r.visibility).length };
+    return { lessons: lessons.slice(0, limit), records: this.lessonCache.records };
+  }
+
   /** What a crew member's AI needs to know about the mission: the problem, where the goals stand, and the parts on offer. */
   private aiContext(): string {
     const evaluation = this.evaluate();
     const checks = this.checks();
-    return JSON.stringify({
+    return compactJson({
       problem: this.meta.brief ? { title: this.meta.brief.title, statement: this.meta.brief.problem } : { title: this.scenario.title, statement: this.scenario.briefing.join(" ") },
       crux: this.meta.kit?.crux,
+      // What other crews found out on this kind of mission (from the research archive; their designs differ from this one).
+      learnedByEarlierCrews: this.knowledge(5).lessons.map((l) => `[${l.kind.replace(/_/g, " ")} · ${l.mission}] ${l.text}`),
       crewDefinition: this.meta.game.charter?.statement ?? null,
       goals: evaluation.objectives.map((o) => ({ goal: o.title, needs: o.description, status: o.feedback, credit: Math.round(o.achieved * 100) / 100 })),
       limitsBroken: checks.filter((c) => c.status === "fail").map((c) => `${c.description}: ${c.detail}`),
+      // Parts already on board are in the configuration; the catalogue lists what could still be added.
       catalogue: this.catalog.map((i) => ({ id: i.id, label: i.label, what: i.description, component: i.component })),
       flight: this.flightPicture(),
     });
@@ -305,7 +348,7 @@ export class MissionSession extends EventEmitter<SessionEvents> {
           open.toDay = t.day; open.to = date(t.day); open.worstMarginW = Math.round(Math.min(open.worstMarginW, t.marginW) * 10) / 10;
         } else open = null;
       }
-      const sample = sim.timeline.filter((_, i) => i % Math.max(1, Math.round(sim.timeline.length / 13)) === 0).map((t) => ({ day: t.day, date: t.date.slice(0, 10), powerMarginW: Math.round(t.marginW * 10) / 10, shadowShareOfOrbit: Math.round(t.eclipseFraction * 100) / 100, linkMarginDb: t.linkMarginDb === null ? null : Math.round(t.linkMarginDb * 10) / 10, storedGb: Math.round(t.storageGb * 10) / 10 }));
+      const sample = sim.timeline.filter((_, i) => i % Math.max(1, Math.round(sim.timeline.length / 7)) === 0).map((t) => ({ day: t.day, date: t.date.slice(0, 10), powerMarginW: Math.round(t.marginW * 10) / 10, shadowShareOfOrbit: Math.round(t.eclipseFraction * 100) / 100, linkMarginDb: t.linkMarginDb === null ? null : Math.round(t.linkMarginDb * 10) / 10, storedGb: Math.round(t.storageGb * 10) / 10 }));
       return {
         note: `Simulated flight of the current design: one step per day for ${sim.days} days from the mission date, with this mission's in-flight events. Sampled every ${Math.max(1, Math.ceil(sim.days / 180))} day(s).`,
         totals: sim.kpis,
@@ -313,7 +356,7 @@ export class MissionSession extends EventEmitter<SessionEvents> {
         throughTheYear: sample,
         inFlightEvents: sim.flightEvents.map((e) => ({ day: e.day, date: date(e.day), what: e.title, cost: e.outcome })),
         byInstrument: sim.returnedByInstrument.map((r) => ({ instrument: r.name, returnedGb: Math.round(r.returnedGb * 10) / 10, lostOnBoardGb: Math.round(r.lostGb * 10) / 10 })),
-        controlLogic: sim.controlLog.slice(0, 12),
+        controlLogic: sim.controlLog.slice(0, 6),
       };
     } catch (err) {
       return { note: `The flight could not be simulated for this design: ${err instanceof Error ? err.message : String(err)}` };
@@ -326,7 +369,11 @@ export class MissionSession extends EventEmitter<SessionEvents> {
 
   /** Parts this crew can add: the scenario's catalogue, or every part in a sandbox. */
   get catalog(): CatalogItem[] {
-    return this.sandbox ? FULL_CATALOG : this.scenario.catalog;
+    const all = (this.sandbox ? FULL_CATALOG : this.scenario.catalog).map((i) => ({ ...i, tier: tierOf(i.id) }));
+    if (this.sandbox || this.meta.difficulty !== "cadet") return all;
+    // Cadet level: the simple parts, and the parts this mission's kit lays out (so the problem can always be solved).
+    const kit = new Set((this.meta.kit?.toolbox ?? []).map((t) => t.itemId));
+    return all.filter((i) => i.tier === "simple" || kit.has(i.id));
   }
 
   /** The scored objectives: the scenario's, shaped by the team's mission definition. */
@@ -513,11 +560,11 @@ export class MissionSession extends EventEmitter<SessionEvents> {
   }
 
   // ---------- AI runtime builder entry points ----------
-  submitRequest(accountId: string, text: string, trainingConsent = false): RequestRecord {
+  submitRequest(accountId: string, text: string, trainingConsent = false, topic?: string): RequestRecord {
     const m = this.require(accountId, "viewer");
     if (this.meta.game.submitted) throw new SessionError("This mission has been submitted.", 409);
     this.deps.audit.record({ actor: accountId, action: "request.submit", sessionId: this.meta.id, detail: { text: text.slice(0, 500) } });
-    return this.requests.submit({ text, user: { id: accountId, role: m.role }, trainingConsent });
+    return this.requests.submit({ text, user: { id: accountId, role: m.role }, trainingConsent, ...(topic ? { topic } : {}) });
   }
 
   /** Add a catalogue component through the pipeline (asset generation, staging, tests, policy). */
@@ -725,7 +772,7 @@ export class MissionSession extends EventEmitter<SessionEvents> {
   private metricsOf(config: MissionConfig, derived: Derived): DesignMetrics {
     const v = <T>(node: string): T | null => (derived[node]?.value as T | null | undefined) ?? null;
     const checks = engineeringChecks(config, derived);
-    const evaluation = evaluateMission({ objectives: this.objectives, config, derived, checks, simulation: null, maturity: this.maturity(), contributors: this.meta.game.contributors.length, unverifiedContent: config.scripts.filter((s) => s.origin.kind === "model_generated").length });
+    const evaluation = evaluateMission({ objectives: this.objectives, config, derived, checks, simulation: null, maturity: this.maturity(), roles: this.meta.game.roleClaims ?? {}, contributors: this.meta.game.contributors.length, unverifiedContent: config.scripts.filter((s) => s.origin.kind === "model_generated").length });
     const launch = v<{ name: string | null }>("launch.vehicle");
     return {
       score: evaluation.score,
@@ -874,8 +921,17 @@ export class MissionSession extends EventEmitter<SessionEvents> {
       simulation: g.simulationVersion === head.version ? g.simulation : null,
       maturity: this.maturity(),
       contributors: g.contributors.length,
+      roles: g.roleClaims ?? {},
       unverifiedContent: head.config.scripts.filter((s) => s.origin.kind === "model_generated").length,
     });
+  }
+
+  /** Every role this problem came with: what it answers for, whether that holds now, and who has taken it. */
+  roleWatches(): RoleWatch[] {
+    const head = this.store.head();
+    const evaluation = this.evaluate();
+    const claims = this.meta.game.roleClaims ?? {};
+    return (this.meta.kit?.roles ?? []).map((r) => ({ seat: r.seat, holder: claims[r.seat] ?? null, ...roleWatch(r.seat, head.config, head.derived, this.checks(), evaluation.objectives) }));
   }
 
   runSimulation(accountId: string): MissionSimulation {
@@ -1016,6 +1072,8 @@ export class MissionSession extends EventEmitter<SessionEvents> {
       mission: head,
       checks: this.checks(),
       game: this.meta.game,
+      roles: this.roleWatches(),
+      knowledge: this.knowledge(6),
       maturity: this.maturity(),
       evaluation: this.evaluate(),
       locks: this.activeLocks(),
@@ -1035,6 +1093,7 @@ export class SessionManager {
   private readonly designsFile: string | null;
 
   constructor(private readonly deps: SessionDeps) {
+    deps.knownSession ??= (id) => this.sessions.has(id);
     this.submissionsFile = deps.dataDir ? path.join(deps.dataDir, "submissions.jsonl") : null;
     if (this.submissionsFile && existsSync(this.submissionsFile)) {
       this.submissions = readFileSync(this.submissionsFile, "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as Submission);
@@ -1074,6 +1133,7 @@ export class SessionManager {
       if (m.massLimitKg) m.massLimitKg = Math.round(m.massLimitKg * brief.constraints.massFactor * 10) / 10;
       if (m.missionDurationDays) m.missionDurationDays = Math.max(30, Math.round(m.missionDurationDays * brief.constraints.durationFactor));
       m.name = brief.title;
+      if (brief.world?.craftName) mission.config.spacecraft.name = brief.world.craftName;
     }
     const now = new Date().toISOString();
     const meta: SessionMeta = {
@@ -1081,6 +1141,7 @@ export class SessionManager {
       name: (input.name ?? "").trim().slice(0, 60) || `${brief?.title ?? scenario.title} — ${account.displayName}`.slice(0, 60),
       ...(brief ? { brief: { id: brief.id, title: brief.title, problem: brief.problem, whyItMatters: brief.whyItMatters, scienceQuestions: brief.scienceQuestions, origin: brief.origin, ...(brief.modelId ? { modelId: brief.modelId } : {}) } } : {}),
       kit: brief?.kit ?? kitFor(scenario.id),
+      ...(brief?.world ? { world: brief.world } : {}),
       scenarioId: scenario.id,
       mode: input.mode === "sandbox" ? "sandbox" : "campaign",
       seed,

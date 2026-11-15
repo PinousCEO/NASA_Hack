@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import Backdrop from "@/components/Backdrop";
 import Nav from "@/components/Nav";
-import { api } from "@/lib/api";
+import { api, dayText } from "@/lib/api";
 
 export default function Leaderboard() {
   const [scenarios, setScenarios] = useState<any[]>([]);
@@ -69,7 +69,7 @@ export default function Leaderboard() {
                       <td><span className="chip info">{r.grade}</span></td>
                       {["science", "engineering", "programmatic"].map((c) => <td key={c} className="mono">{r.categories[c].earned.toFixed(0)}/{r.categories[c].possible}</td>)}
                       <td className="mono">{r.cml}</td>
-                      <td className="dim">{new Date(r.submittedAt).toLocaleDateString()}</td>
+                      <td className="dim">{dayText(r.submittedAt)}</td>
                     </tr>
                   ))}
                 </tbody>

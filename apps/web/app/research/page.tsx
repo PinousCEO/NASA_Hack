@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import Backdrop from "@/components/Backdrop";
 import Nav from "@/components/Nav";
-import { go as navigate, type Account, api } from "@/lib/api";
+import { go as navigate, type Account, api, whenText } from "@/lib/api";
 
 const KINDS = ["mission_problem", "hypothesis", "user_contribution", "design_change", "trade_study", "simulation_result", "tool_execution", "scientific_evidence", "validation_report", "ai_evaluation", "failure", "mission_outcome"];
 const tone = (v: string): string => (v === "model_judgment" || v === "unverified" ? "warn" : v === "heuristic" ? "" : "ok");
@@ -70,8 +70,8 @@ export default function Research() {
                       <td><span className="chip info">{r.kind.replace(/_/g, " ")}</span></td>
                       <td>{r.summary}</td>
                       <td><span className={`chip ${tone(r.verification)}`}>{r.verification.replace(/_/g, " ")}</span></td>
-                      <td className="dim">{r.missionName} v{r.missionVersion}</td>
-                      <td className="dim mono">{new Date(r.createdAt).toLocaleString()}</td>
+                      <td className="dim">{r.missionName ? `${r.missionName}${r.missionVersion ? ` v${r.missionVersion}` : ""}` : "–"}</td>
+                      <td className="dim mono" style={{ whiteSpace: "nowrap" }}>{whenText(r.createdAt)}</td>
                     </tr>
                   ))}
                 </tbody>

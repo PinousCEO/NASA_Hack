@@ -17,6 +17,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { MissionVersion, Presence } from "../api";
 import { CORE_ORIGIN } from "../api";
 import { bake, buildBus, buildComponent, buildRover, buildSpacecraft, type SpacecraftModel } from "./models";
+import { SiteModel, type SiteKind } from "./site";
 import { type BodyId, createFlowLine, createFlowTube, createLabel, createPlanet, createSun, disposeObject, onGlobe, type Planet, toView } from "./space";
 import { type Sky, skyAt, SPIN_PERIOD_S } from "./ephemeris";
 
@@ -47,6 +48,20 @@ export class MissionScene {
   onRebuild: (() => void) | null = null;
   /** GLB assets fetched and shown so far. */
   loadedAssets = 0;
+  /** Called with the ids of parts (or generated objects) that were not in the design a moment ago: they are being built. */
+  onBuilt: ((ids: string[]) => void) | null = null;
+  /** Places crew members are pointing at, by who points ("self" is the local player). They sit on the globe and turn with it. */
+  private pings = new Map<string, THREE.Group>();
+  /** The place this mission is about, as a model beside the world (see site.ts), and the lines that tie it to the world and the spacecraft. */
+  private site: SiteModel | null = null;
+  private siteStamp = "";
+  private readonly sight = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineBasicMaterial({ color: new THREE.Color(0.5, 2.4, 2.8), transparent: true, opacity: 0.9, depthWrite: false }));
+  private readonly leader = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineBasicMaterial({ color: 0xffb020, transparent: true, opacity: 0.45, depthWrite: false }));
+  private viewer: THREE.Camera | null = null;
+  /** Is the place in the spacecraft's line of sight right now (as drawn)? */
+  observing = false;
+  private known: Set<string> | null = null;
+  private born = new Map<string, number>();
 
   private planet: Planet | null = null;
   private body: BodyId | null = null;
@@ -291,6 +306,7 @@ export class MissionScene {
     const name = createLabel(spacecraft.name.toUpperCase(), { height: 0.13, color: "#f2efe8", sub: "enlarged · 1 lap shown in 40 s" });
     name.position.y = 0.3;
     const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: new THREE.Color(1.6, 1.9, 2.0), transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
+    halo.raycast = () => undefined; // decoration: never a pointer target (and a sprite cannot be hit by a headset's ray)
     halo.scale.setScalar(0.36);
     halo.name = "beacon";
     name.name = "craft-label";
@@ -392,26 +408,73 @@ export class MissionScene {
     this.bus.add(busLabel);
     this.systemsView.add(this.bus);
 
+    // A model the AI generated for a part it added in the same request is that part's body, not a second object
+    // beside it: the two are matched by the words their names share.
+    const words = (s: unknown): Set<string> => new Set(String(s ?? "").toLowerCase().match(/[a-z]{4,}/g) ?? []);
+    const modelFor = new Map<string, any>();
+    const usedNodes = new Set<string>();
+    for (const node of config.scene.nodes as any[]) {
+      if (node.componentId || !node.assetId) continue;
+      const record = config.assets.find((a: any) => a.id === node.assetId);
+      if (!record) continue;
+      const w = words(`${node.name} ${record.description ?? ""}`);
+      let best: any = null;
+      let bestScore = 1;
+      for (const c of comps) {
+        if (modelFor.has(c.id)) continue;
+        let score = 0;
+        for (const x of words(c.name)) if (w.has(x)) score++;
+        if (score > bestScore) { best = c; bestScore = score; }
+      }
+      if (best) { modelFor.set(best.id, record); usedNodes.add(node.id); }
+    }
+    const present = [...comps.map((c) => c.id as string), ...(config.scene.nodes as any[]).filter((n) => !n.componentId && n.assetId && !usedNodes.has(n.id)).map((n) => n.id as string)];
+    const fresh = this.known ? present.filter((id) => !this.known!.has(id)) : [];
+    this.known = new Set(present);
+    for (const id of fresh) this.born.set(id, this.time);
+
     comps.forEach((c, i) => {
       const node = config.scene.nodes.find((n: any) => n.componentId === c.id);
       const holder = new THREE.Group();
       holder.name = `component:${c.id}`;
-      holder.userData = { componentId: c.id, path: `spacecraft.components.${c.id}`, nodeId: node?.id ?? null, label: c.name };
+      holder.userData = { componentId: c.id, path: `spacecraft.components.${c.id}`, nodeId: node?.id ?? null, label: c.name, kind: c.type, phase: i * 1.7 };
       const placed = node && node.position.some((v: number) => v !== 0);
       if (placed) {
         holder.position.fromArray(node.position);
       } else {
         const angle = (i / comps.length) * Math.PI * 2 + Math.PI / 6;
         const tier = { solar_panel: 0.0, battery: -0.3, antenna: 0.3, instrument: 0.12, load: -0.2 }[c.type as string] ?? 0;
-        holder.position.set(Math.cos(angle) * 1.25, tier, Math.sin(angle) * 1.25);
+        // The ring widens as parts are added, so neighbours and their labels keep apart.
+        const ring = 1.25 + Math.max(0, comps.length - 5) * 0.09;
+        holder.position.set(Math.cos(angle) * ring, tier, Math.sin(angle) * ring);
       }
       const part = buildComponent(c);
       const height = fit(part, c.type === "solar_panel" ? 0.74 : 0.5);
       part.position.y = -0.2;
       if (c.type === "solar_panel") part.rotation.z = 0.5; // tilt the wing so the cell face catches the light
+      part.name = "part";
       holder.add(part);
+      const generated = modelFor.get(c.id);
+      if (generated) {
+        void this.asset(generated.uri).then((model) => {
+          if (this.componentObjects.get(c.id) !== holder) return; // rebuilt meanwhile
+          fit(model, 0.56);
+          const box = new THREE.Box3().setFromObject(model);
+          model.position.y -= box.min.y + 0.2;
+          model.position.x -= (box.min.x + box.max.x) / 2;
+          model.position.z -= (box.min.z + box.max.z) / 2;
+          const body = new THREE.Group();
+          body.name = "part";
+          body.add(model);
+          holder.remove(part);
+          disposeObject(part);
+          holder.add(body);
+          this.loadedAssets++;
+        }).catch(() => undefined);
+      }
       const label = createLabel(c.name, { height: 0.18, ...this.partLabel(c) });
-      label.position.y = Math.max(0.4, height + 0.12);
+      // Neighbouring labels sit at alternating heights so they do not cover one another.
+      label.position.y = Math.max(0.4, height + 0.12) + (i % 2) * 0.2;
       label.name = "label";
       holder.add(label);
       const ring = new THREE.Mesh(new THREE.TorusGeometry(0.36, 0.009, 8, 64), new THREE.MeshBasicMaterial({ color: 0x35e0d0, transparent: true, opacity: 0 }));
@@ -425,7 +488,7 @@ export class MissionScene {
 
     // Generated assets that are not tied to a component (text-to-3D results): versioned GLBs.
     for (const node of config.scene.nodes as any[]) {
-      if (node.componentId || !node.assetId) continue;
+      if (node.componentId || !node.assetId || usedNodes.has(node.id)) continue;
       const record = config.assets.find((a: any) => a.id === node.assetId);
       if (!record) continue;
       const holder = new THREE.Group();
@@ -443,7 +506,10 @@ export class MissionScene {
         const box = new THREE.Box3().setFromObject(model);
         model.position.y -= box.min.y + 0.2;
         model.name = "glb";
-        holder.add(model);
+        const body = new THREE.Group();
+        body.name = "part";
+        body.add(model);
+        holder.add(body);
         this.loadedAssets++;
       }).catch(() => undefined);
     }
@@ -469,6 +535,7 @@ export class MissionScene {
       if (o.name === "led") this.leds.push(o as THREE.Mesh);
     });
     this.onRebuild?.();
+    if (fresh.length) this.onBuilt?.(fresh);
   }
 
   private refreshLabels(): void {
@@ -478,6 +545,7 @@ export class MissionScene {
       if (!holder || !old) continue;
       const label = createLabel(c.name, { height: 0.18, ...this.partLabel(c) });
       label.position.copy(old.position);
+      if (old.userData.baseY !== undefined) label.position.y = old.userData.baseY as number; // not the height it was lifted to
       label.name = "label";
       holder.remove(old);
       disposeObject(old);
@@ -615,10 +683,91 @@ export class MissionScene {
   }
 
   /** Remote participants, drawn in the mission frame: headsets as visors with hands, desktops as name tags. */
+  /** Mark (or, with null, unmark) the place someone points at: a ring, a beam and their name, in their colour. */
+  setPing(key: string, point: number[] | null | undefined, color: string, name: string, note = "points here"): void {
+    const old = this.pings.get(key);
+    const stamp = point ? `${point[0]!.toFixed(1)},${point[1]!.toFixed(1)},${color},${name}` : "";
+    if (old && old.userData.stamp === stamp && old.parent === this.planet?.globe) return;
+    if (old) { old.parent?.remove(old); disposeObject(old); this.pings.delete(key); }
+    if (!point || !this.planet) return;
+    const g = new THREE.Group();
+    g.userData.stamp = stamp;
+    const up = onGlobe(point[0]!, point[1]!);
+    g.position.copy(up);
+    g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
+    const tint = new THREE.Color(color).multiplyScalar(2.2);
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.06, 0.082, 48).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: tint, transparent: true, opacity: 0.95, side: THREE.DoubleSide, depthWrite: false }));
+    ring.name = "ping-ring";
+    ring.position.y = 0.006;
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, 0.5, 8), new THREE.MeshBasicMaterial({ color: tint, transparent: true, opacity: 0.9, depthWrite: false }));
+    beam.position.y = 0.25;
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(0.03, 16, 12), new THREE.MeshBasicMaterial({ color: tint }));
+    dot.position.y = 0.5;
+    const ns = point[0]! >= 0 ? "N" : "S";
+    const lon = ((point[1]! + 540) % 360) - 180;
+    const tag = createLabel(name.toUpperCase(), { height: key === "target" ? 0.11 : 0.17, color, sub: `${note} · ${Math.abs(point[0]!).toFixed(1)}°${ns} ${Math.abs(lon).toFixed(1)}°${lon >= 0 ? "E" : "W"}` });
+    tag.position.y = 0.68;
+    for (const o of [ring, beam, dot]) o.raycast = () => undefined;
+    g.add(ring, beam, dot, tag);
+    this.planet.globe.add(g);
+    this.pings.set(key, g);
+    this.labelsChecked = -1;
+  }
+
+  /** Who is pointing where right now (for checks): "key: lat,lon,colour,name". */
+  pingsShown(): string[] { return [...this.pings].map(([k, g]) => k + ": " + String(g.userData.stamp)); }
+
+  /**
+   * Show the place this mission is about as a model beside the world, with what the spacecraft's camera can tell
+   * apart there against what the problem needs. Null takes it away.
+   */
+  setSite(spec: { kind: SiteKind; name: string; nowM: number | null; needM: number | null } | null): void {
+    const stamp = spec ? `${spec.kind}|${spec.name}|${this.body}` : "";
+    if (stamp !== this.siteStamp) {
+      this.siteStamp = stamp;
+      if (this.site) { this.orbitView.remove(this.site.group); this.site.dispose(); this.site = null; }
+      if (spec) {
+        this.site = new SiteModel(spec.kind, this.body ?? "moon", spec.name);
+        this.site.group.scale.setScalar(0.7);
+        this.site.group.position.set(1.9, -0.3, 0.6);
+        this.orbitView.add(this.site.group);
+        if (!this.sight.parent) { for (const l of [this.sight, this.leader]) { l.raycast = () => undefined; l.frustumCulled = false; this.orbitView.add(l); } }
+        this.labelsChecked = -1;
+      }
+    }
+    this.site?.setDetail(spec?.nowM ?? null, spec?.needM ?? null);
+    this.sight.visible = this.leader.visible = Boolean(spec);
+  }
+
+  /** What the site model shows (for checks). */
+  siteShown(): { kind: string; observing: boolean } | null { return this.site ? { kind: this.site.kind, observing: this.observing } : null; }
+
+  /** Where on the world a ray lands: [latitude, east longitude] in degrees, or null if it misses. */
+  globePointFromRay(raycaster: THREE.Raycaster): number[] | null {
+    if (this.mode !== "orbit" || !this.planet) return null;
+    const hit = raycaster.intersectObject(this.planet.globe, false)[0];
+    return hit ? this.latLon(hit.point) : null;
+  }
+
+  /** The place under a point held at the world's surface (a fingertip): null if the point is not close to the surface. */
+  globePointNear(world: THREE.Vector3): number[] | null {
+    if (this.mode !== "orbit" || !this.planet || !this.orbitView.visible) return null;
+    const local = this.planet.globe.worldToLocal(world.clone());
+    const r = local.length();
+    return r > 0.72 && r < 1.4 ? this.latLon(world) : null;
+  }
+
+  private latLon(world: THREE.Vector3): number[] {
+    const p = this.planet!.globe.worldToLocal(world.clone()).normalize();
+    return [Math.round((Math.asin(Math.max(-1, Math.min(1, p.y))) * 180 / Math.PI) * 10) / 10, Math.round((Math.atan2(-p.z, p.x) * 180 / Math.PI) * 10) / 10];
+  }
+
   setPresence(roster: Presence[], selfClientId: string | null): void {
     const seen = new Set<string>();
     const focus = new Map<string, string>();
+    for (const key of [...this.pings.keys()]) if (key !== "self" && key !== "target" && !roster.some((p) => p.clientId === key && p.clientId !== selfClientId)) this.setPing(key, null, "", "");
     for (const p of roster) {
+      if (p.clientId !== selfClientId) this.setPing(p.clientId, p.point ?? null, p.color, p.displayName);
       const component = p.focus?.match(/components\.([\w-]+)/)?.[1];
       if (component) focus.set(component, p.color);
       if (p.clientId === selfClientId) continue;
@@ -699,8 +848,76 @@ export class MissionScene {
   // ---------- per-frame ----------
   private scratch = { a: new THREE.Vector3(), b: new THREE.Vector3(), c: new THREE.Vector3(), q: new THREE.Quaternion(), m: new THREE.Matrix4() };
 
+  /**
+   * Keep the part labels of the systems view from covering one another as the camera moves: labels that would
+   * overlap on screen are lifted one above the other. Called by the desktop frame loop with its camera.
+   */
+  declutterLabels(camera: THREE.Camera): void {
+    this.viewer = camera;
+    if (!this.systemsView.visible) return;
+    const items: { label: THREE.Object3D; base: number; x: number; y: number; w: number; h: number }[] = [];
+    const p = new THREE.Vector3();
+    const q = new THREE.Vector3();
+    const worldScale = new THREE.Vector3();
+    // every name tag in the systems view takes part: the parts' own and the spacecraft's
+    const labels: THREE.Object3D[] = [];
+    this.systemsView.traverse((o) => { if (o.userData.labelBase && o.visible) labels.push(o); });
+    for (const label of labels) {
+      if (label.userData.baseY === undefined) label.userData.baseY = label.position.y;
+      label.position.y = label.userData.baseY as number;
+      label.getWorldPosition(p).project(camera);
+      // size on screen: project a point one label-height above, and use the sprite's own aspect
+      q.setFromMatrixPosition(label.matrixWorld);
+      q.y += label.getWorldScale(worldScale).y; // the tag's real height: the whole scene is scaled down on the headset's table
+      q.project(camera);
+      const h = Math.abs(q.y - p.y);
+      const w = h * (label.scale.x / Math.max(1e-6, label.scale.y));
+      if (p.z < 1) items.push({ label, base: label.userData.baseY as number, x: p.x, y: p.y, w, h });
+    }
+    items.sort((a, b) => a.y - b.y);
+    for (let i = 1; i < items.length; i++) {
+      const b = items[i]!;
+      for (let k = 0; k < i; k++) {
+        const a = items[k]!;
+        const overlapX = Math.abs(a.x - b.x) < (a.w + b.w) / 2;
+        const gap = b.y - b.h / 2 - (a.y + a.h / 2);
+        if (overlapX && gap < 0.01) {
+          const lift = 0.01 - gap; // in normalised screen units
+          b.y += lift;
+          b.label.position.y += (lift / Math.max(1e-6, b.h)) * b.label.scale.y;
+        }
+      }
+    }
+  }
+
+  /** Presentation for a small table-top model (the headset): larger labels and a readable unlit side. 1 and 0.006 on a screen. */
+  private labelScale = 1;
+  private nightFloor = 0.006;
+  private labelsChecked = 0;
+  setTableTop(on: boolean): void {
+    this.labelScale = on ? 2.2 : 1;
+    this.nightFloor = on ? 0.045 : 0.006;
+    this.labelsChecked = -1;
+  }
+  /** The Sun's direction in the scene's own frame, for turning the table so its lit side faces the player. */
+  sunHeading(): number {
+    return Math.atan2(this.sunLocal.x, this.sunLocal.z);
+  }
+  private sizeLabels(): void {
+    // The systems view packs many labelled parts close together, so its labels grow less than the orbit view's.
+    const size = (group: THREE.Object3D, k: number): void => group.traverse((o) => {
+      const base = o.userData.labelBase as [number, number] | undefined;
+      if (base && o.userData.labelK !== k) { o.scale.set(base[0] * k, base[1] * k, 1); o.userData.labelK = k; }
+    });
+    size(this.orbitView, this.labelScale);
+    size(this.systemsView, Math.min(this.labelScale, 1.6));
+  }
+
   update(dt: number): void {
     this.time += dt;
+    // Labels are rebuilt in many places; a cheap pass a few times a second keeps their size right for the view.
+    if (this.labelsChecked < 0 || this.time - this.labelsChecked > 0.4) { this.labelsChecked = this.time; if (this.labelScale !== 1 || this.root.userData.labelsScaled) { this.sizeLabels(); this.root.userData.labelsScaled = this.labelScale !== 1; } }
+    this.planet?.setNightFloor(this.nightFloor);
     const { a, b, c, q, m } = this.scratch;
     // The clock drives everything that depends on when: the Sun's direction, how the world is turned, where home is.
     if (this.body && this.clockStarted) {
@@ -801,6 +1018,45 @@ export class MissionScene {
       this.shock.scale.setScalar(0.05 + ease(shockT) * 0.9);
       (this.shock.material as THREE.MeshBasicMaterial).opacity = (1 - shockT) * 0.9;
     }
+    if (this.site && this.orbitView.visible) {
+      // The model keeps to the viewer's right of the world, turned to face them, wherever they look from.
+      if (this.viewer) {
+        const right = a.set(1, 0, 0).applyQuaternion(this.viewer.getWorldQuaternion(q)).applyQuaternion(this.orbitView.getWorldQuaternion(q).invert());
+        const upv = b.set(0, 1, 0).applyQuaternion(this.viewer.getWorldQuaternion(q)).applyQuaternion(this.orbitView.getWorldQuaternion(q).invert());
+        // In front of the world's lower right, inside the part of the view the side panels leave free.
+        const toward = this.orbitView.worldToLocal(this.viewer.getWorldPosition(new THREE.Vector3())).normalize();
+        const want = c.copy(right).multiplyScalar(0.7).addScaledVector(upv, -0.62).addScaledVector(toward, 1.1);
+        this.site.group.position.lerp(want, 1 - Math.exp(-dt * 4));
+        const toViewer = a.copy(this.viewer.getWorldPosition(a)).sub(this.site.group.getWorldPosition(b)).applyQuaternion(this.orbitView.getWorldQuaternion(q).invert());
+        this.site.group.rotation.set(0.45, Math.atan2(toViewer.x, toViewer.z), 0, "YXZ");
+      }
+      const mark = this.pings.get("target");
+      let seen = false;
+      if (mark) {
+        const place = this.orbitView.worldToLocal(mark.getWorldPosition(a));
+        const up = b.copy(place).normalize();
+        seen = this.orbitPath.length > 1 && c.subVectors(this.craft.position, place).normalize().dot(up) > 0.08;
+        const sp = this.sight.geometry.getAttribute("position") as THREE.BufferAttribute;
+        sp.setXYZ(0, this.craft.position.x, this.craft.position.y, this.craft.position.z);
+        sp.setXYZ(1, place.x, place.y, place.z);
+        sp.needsUpdate = true;
+        (this.sight.material as THREE.LineBasicMaterial).opacity = 0.55 + 0.4 * Math.sin(this.time * 14);
+        const lp = this.leader.geometry.getAttribute("position") as THREE.BufferAttribute;
+        lp.setXYZ(0, place.x * 1.02, place.y * 1.02, place.z * 1.02);
+        lp.setXYZ(1, this.site.group.position.x, this.site.group.position.y + 0.1, this.site.group.position.z);
+        lp.needsUpdate = true;
+      }
+      this.leader.visible = Boolean(mark);
+      this.sight.visible = seen;
+      this.observing = seen;
+      this.site.setObserving(seen);
+      this.site.update(dt);
+    }
+    for (const ping of this.pings.values()) {
+      const k = (this.time * 0.9) % 1;
+      const pr = ping.getObjectByName("ping-ring") as THREE.Mesh | undefined;
+      if (pr) { pr.scale.setScalar(0.7 + k * 1.6); (pr.material as THREE.MeshBasicMaterial).opacity = 1 - k * 0.85; }
+    }
     const ring = this.siteMarker?.getObjectByName("site-ring");
     if (ring) {
       const k = (this.time * 0.6) % 1;
@@ -809,6 +1065,33 @@ export class MissionScene {
     }
 
     if (this.systemsView.visible) {
+      // Hardware is not a still picture: arrays lean after the Sun, dishes slew, instruments scan, and a part that
+      // has just been added assembles itself where it stands.
+      const move = (holder: THREE.Object3D, id: string, kind: string): void => {
+        const part = holder.getObjectByName("part");
+        const phase = (holder.userData.phase as number | undefined) ?? 0;
+        const t = this.time + phase;
+        const bornAt = this.born.get(id);
+        const age = bornAt === undefined ? 9 : this.time - bornAt;
+        if (age < 1.6) {
+          const k = Math.max(0, age / 1.6);
+          const out = 1 + 2.2 * Math.pow(k - 1, 3) + 1.2 * Math.pow(k - 1, 2); // overshoots a little, then settles
+          holder.scale.setScalar(Math.max(0.02, out));
+          holder.rotation.y = (1 - k) * (1 - k) * 7;
+        } else if (bornAt !== undefined) {
+          holder.scale.setScalar(1);
+          holder.rotation.y = 0;
+          this.born.delete(id);
+        }
+        if (!part || this.held.has(id)) return;
+        if (kind === "solar_panel") part.rotation.z = 0.5 + 0.16 * Math.sin(t * 0.45);
+        else if (kind === "antenna") { part.rotation.y = 0.55 * Math.sin(t * 0.38); part.rotation.x = 0.1 * Math.sin(t * 0.61); }
+        else if (kind === "instrument") part.rotation.y = 0.38 * Math.sin(t * 0.7);
+        else if (kind === "generated") part.rotation.y += dt * 0.4;
+        else part.position.y = -0.2 + 0.012 * Math.sin(t * 1.5);
+      };
+      for (const [id, holder] of this.componentObjects) move(holder, id, String(holder.userData.kind ?? "load"));
+      for (const [id, holder] of this.freeObjects) move(holder, id, "generated");
       const blink = Math.sin(this.time * 4) > 0.2;
       for (const led of this.leds) led.visible = blink;
       const from = a, to = b, mid = c;

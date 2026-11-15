@@ -171,19 +171,21 @@ export function SystemsPanel({ c }: { c: Ctx }) {
 
       <details className="fold" open>
         <summary>Lines · {wiring.links.length} · harness {fmt(wiring.harnessMassKg)} kg</summary>
-        <table className="data lines">
-          <tbody>
-            {wiring.links.map((l) => (
-              <tr key={l.id} className={l.utilisation !== null && l.utilisation >= 0.999 && l.kind !== "control" ? "full" : ""}>
-                <td><span className={`wire ${l.kind}`}>{l.kind}</span></td>
-                <td>{endName(c, l.from)}<span className="dim"> → </span>{endName(c, l.to)}</td>
-                <td className="mono">{l.kind === "control" ? "commands" : `${rate(l.flow, KIND_UNIT[l.kind]!)} / ${rate(l.rating, KIND_UNIT[l.kind]!)}`}</td>
-                <td className="mono dim">{fmt(l.massKg * 1000)} g</td>
-                <td><button className="btn sm ghost" disabled={locked(c)} title="Remove this line" onClick={() => remove(`systems.links.${l.id}`, `the ${l.kind} line ${endName(c, l.from)} → ${endName(c, l.to)}`)}>✕</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="lines">
+          {wiring.links.map((l) => {
+            const full = l.utilisation !== null && l.utilisation >= 0.999 && l.kind !== "control";
+            const [fromNode] = String(l.from).split(".");
+            const [toNode] = String(l.to).split(".");
+            return (
+              <div key={l.id} className={`wline ${full ? "full" : ""}`} title={`${endName(c, l.from)} → ${endName(c, l.to)}`}>
+                <span className={`wire ${l.kind}`}>{l.kind}</span>
+                <span className="ends">{nodeName(c, fromNode!)}<span className="dim"> → </span>{nodeName(c, toNode!)}</span>
+                <span className="carry mono">{l.kind === "control" ? "commands" : <>{fmt(l.flow)}<span className="dim"> / {rate(l.rating, KIND_UNIT[l.kind]!)}</span></>}<i>{fmt(l.massKg * 1000)} g{full ? " · full" : ""}</i></span>
+                <button className="btn sm ghost" disabled={locked(c)} title="Remove this line" aria-label="Remove this line" onClick={() => remove(`systems.links.${l.id}`, `the ${l.kind} line ${endName(c, l.from)} → ${endName(c, l.to)}`)}>✕</button>
+              </div>
+            );
+          })}
+        </div>
         <div className="row" style={{ marginTop: 6 }}><button className="btn sm ghost" onClick={() => setAdding(!adding)}>{adding ? "Close" : "+ Add a line by hand"}</button><button className="btn sm ghost" onClick={() => bus.send("ask", "Which parts are not fully connected, and what lines would each need?")}>Ask my AI</button></div>
         {adding && <AddLine c={c} />}
       </details>

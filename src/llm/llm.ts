@@ -8,6 +8,7 @@ import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import OpenAI from "openai";
+import { toFile } from "openai";
 import { z } from "zod";
 import { CapabilityError } from "../core/types.js";
 
@@ -16,6 +17,10 @@ export interface LlmService {
   status(): { available: boolean; reason?: string };
   /** One request whose response is constrained to `schema`. */
   structured<S extends z.ZodType>(args: { system: string; prompt: string; schema: S; signal?: AbortSignal }): Promise<z.infer<S>>;
+  /** Token usage since the process started, when the provider reports it. */
+  usage?(): LlmUsage;
+  /** Speech to text, when the provider has it: a short recording in, the words spoken out. */
+  transcribe?(args: { audio: Uint8Array; mime: string; signal?: AbortSignal }): Promise<string>;
 }
 
 export class AnthropicLlm implements LlmService {
@@ -91,6 +96,34 @@ export class AnthropicLlm implements LlmService {
 export class OpenAiLlm implements LlmService {
   readonly modelId: string;
   private client: OpenAI | null = null;
+  private readonly used: LlmUsage = { calls: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningTokens: 0, byPurpose: {} };
+  /**
+   * How hard the model is asked to think before it answers. Hidden reasoning is billed as output, and at the provider's
+   * default it was most of the bill here; these requests are structured and well-specified, so "low" is asked for.
+   * OPENAI_REASONING_EFFORT overrides it ("default" leaves the provider's own setting). If the model rejects the
+   * parameter it is dropped for the rest of the process.
+   */
+  private effort: string | null = (process.env.OPENAI_REASONING_EFFORT ?? "low") === "default" ? null : (process.env.OPENAI_REASONING_EFFORT ?? "low");
+
+  usage(): LlmUsage {
+    return { ...this.used, byPurpose: { ...this.used.byPurpose } };
+  }
+
+  private count(system: string, usage: OpenAI.Completions.CompletionUsage | undefined): void {
+    const input = usage?.prompt_tokens ?? 0;
+    const output = usage?.completion_tokens ?? 0;
+    const reasoning = usage?.completion_tokens_details?.reasoning_tokens ?? 0;
+    this.used.calls++;
+    this.used.inputTokens += input;
+    this.used.cachedInputTokens += usage?.prompt_tokens_details?.cached_tokens ?? 0;
+    this.used.outputTokens += output;
+    this.used.reasoningTokens += reasoning;
+    const p = (this.used.byPurpose[purposeOf(system)] ??= { calls: 0, inputTokens: 0, outputTokens: 0, reasoningTokens: 0 });
+    p.calls++;
+    p.inputTokens += input;
+    p.outputTokens += output;
+    p.reasoningTokens += reasoning;
+  }
 
   constructor(modelId = process.env.OPENAI_MODEL ?? "gpt-5.5", private readonly options: { fetch?: typeof fetch; apiKey?: string } = {}) {
     this.modelId = modelId;
@@ -100,6 +133,46 @@ export class OpenAiLlm implements LlmService {
     return this.options.apiKey || process.env.OPENAI_API_KEY
       ? { available: true }
       : { available: false, reason: "No OpenAI credentials configured (set OPENAI_API_KEY)" };
+  }
+
+  /**
+   * The words in a short recording (a player speaking to their AI in the headset, where there is no keyboard).
+   * OPENAI_TRANSCRIBE_MODEL names the model; if the account does not have it, "whisper-1" is tried once.
+   */
+  async transcribe(args: { audio: Uint8Array; mime: string; signal?: AbortSignal }): Promise<string> {
+    const status = this.status();
+    if (!status.available) throw new CapabilityError(status.reason!, { code: "llm_unavailable" });
+    this.client ??= new OpenAI({
+      apiKey: this.options.apiKey ?? process.env.OPENAI_API_KEY,
+      ...(process.env.OPENAI_BASE_URL ? { baseURL: process.env.OPENAI_BASE_URL } : {}),
+      ...(this.options.fetch ? { fetch: this.options.fetch as never } : {}),
+    });
+    const type = (args.mime.split(";")[0] ?? "").trim() || "audio/webm";
+    const ext = /mp4|m4a|aac/.test(type) ? "mp4" : /ogg/.test(type) ? "ogg" : /wav/.test(type) ? "wav" : /mpeg|mp3/.test(type) ? "mp3" : "webm";
+    const models = [...new Set([process.env.OPENAI_TRANSCRIBE_MODEL ?? "gpt-4o-mini-transcribe", "whisper-1"])];
+    let last: unknown = null;
+    for (const model of models) {
+      try {
+        const file = await toFile(args.audio, `speech.${ext}`, { type });
+        const r = await this.client.audio.transcriptions.create({ file, model }, args.signal ? { signal: args.signal } : undefined);
+        const u = (r as { usage?: { input_tokens?: number; output_tokens?: number } }).usage;
+        this.used.calls++;
+        this.used.inputTokens += u?.input_tokens ?? 0;
+        this.used.outputTokens += u?.output_tokens ?? 0;
+        const p = (this.used.byPurpose["transcribe speech"] ??= { calls: 0, inputTokens: 0, outputTokens: 0, reasoningTokens: 0 });
+        p.calls++;
+        p.inputTokens += u?.input_tokens ?? 0;
+        p.outputTokens += u?.output_tokens ?? 0;
+        return String(r.text ?? "").trim();
+      } catch (err) {
+        last = err;
+        // Only "this model is not available to you" moves on to the next model; anything else is the answer.
+        const s = err instanceof OpenAI.APIError && typeof err.status === "number" ? err.status : 0;
+        if (!(s === 404 || (s === 400 && /model/i.test(String((err as Error).message))))) break;
+      }
+    }
+    if (last instanceof OpenAI.AuthenticationError) throw new CapabilityError("OpenAI credentials were rejected", { code: "llm_auth" });
+    throw new CapabilityError(`Speech could not be transcribed: ${last instanceof Error ? last.message : String(last)}`, { code: "llm_api", retryable: true });
   }
 
   async structured<S extends z.ZodType>(args: { system: string; prompt: string; schema: S; signal?: AbortSignal }): Promise<z.infer<S>> {
@@ -119,15 +192,27 @@ export class OpenAiLlm implements LlmService {
     try {
       let lastProblem = "";
       for (let attempt = 0; attempt < 2; attempt++) {
-        const response = await this.client.chat.completions.create(
+        const request = (effort: string | null) => this.client!.chat.completions.create(
           {
             model: this.modelId,
             messages,
             max_completion_tokens: 16000,
             response_format: { type: "json_schema", json_schema: { name: "result", schema: jsonSchema, strict: false } },
+            ...(effort ? { reasoning_effort: effort as never } : {}),
           },
           args.signal ? { signal: args.signal } : undefined,
         );
+        let response: Awaited<ReturnType<typeof request>>;
+        try {
+          response = await request(this.effort);
+        } catch (err) {
+          // A model that does not take the parameter says so with a 400: ask again without it, and stop sending it.
+          if (this.effort && err instanceof OpenAI.APIError && err.status === 400 && /reasoning/i.test(err.message)) {
+            this.effort = null;
+            response = await request(null);
+          } else throw err;
+        }
+        this.count(args.system, response.usage);
         const choice = response.choices[0];
         if (!choice) throw new CapabilityError("OpenAI returned no choices", { code: "llm_invalid_output", retryable: true });
         if (choice.message.refusal) throw new CapabilityError(`Model declined the request: ${choice.message.refusal.slice(0, 200)}`, { code: "llm_refusal" });
@@ -167,6 +252,29 @@ export class OpenAiLlm implements LlmService {
  * Pick the provider from the environment. `LLM_PROVIDER=openai|anthropic` forces one;
  * otherwise OpenAI is used when OPENAI_API_KEY is set, then Anthropic.
  */
+/** What the language model has been asked, and what it cost in tokens, since this process started. */
+export interface LlmUsage {
+  calls: number;
+  inputTokens: number;
+  /** Input tokens the provider served from its prompt cache (billed at a reduced rate). */
+  cachedInputTokens: number;
+  outputTokens: number;
+  /** Output tokens spent on hidden reasoning rather than on the reply. */
+  reasoningTokens: number;
+  /** The same figures by what the request was for. */
+  byPurpose: Record<string, { calls: number; inputTokens: number; outputTokens: number; reasoningTokens: number }>;
+}
+
+/** A short name for what a request is for, from the opening of its instructions. */
+const purposeOf = (system: string): string =>
+  /structured operations/.test(system) ? "understand a player's request"
+    : /mission brief/i.test(system) ? "write mission briefs"
+      : /small TypeScript modules/.test(system) ? "write a script"
+        : /review/i.test(system.slice(0, 200)) ? "review-board critique"
+          : /plan/i.test(system.slice(0, 120)) ? "plan tool use"
+            : /Design this object|shape/i.test(system.slice(0, 200)) ? "shape a 3D object"
+              : "word a reply";
+
 export function createLlm(): LlmService {
   const forced = (process.env.LLM_PROVIDER ?? "").toLowerCase();
   if (forced === "openai") return new OpenAiLlm();

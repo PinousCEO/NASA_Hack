@@ -225,6 +225,8 @@ export interface RequestRecord {
   plan?: Plan;
   proposalId?: string;
   error?: string;
+  /** What the conversation is about: a part's id, or absent for the mission as a whole. Each topic is its own thread. */
+  topic?: string;
   /** True for a direct action (a catalogue pick, a connection) rather than something said to an AI. */
   action?: boolean;
   /** True once its owner shares it with the crew, and for actions (a catalogue pick, a connection) that everyone sees anyway. A conversation with one's AI is private until then. */

@@ -69,6 +69,58 @@ function Lever({ c, lever }: { c: Ctx; lever: { key: string; why: string } }) {
   }
 }
 
+/** What moves a goal, in plain words: the answer to "how do I get this one?". Never which value is right. */
+const MOVES: Record<string, string> = {
+  maxCoverageLatitudeDeg: "Moves with the orbit's tilt: the orbit reaches as far north and south as it is tilted.",
+  bestImagingResolutionM: "Moves with orbit altitude (lower sees finer) and the camera's aperture (bigger sees finer). Without attitude control images smear.",
+  neutronFootprintKm: "Moves with orbit altitude: lower makes the footprint smaller.",
+  totalReturnedGbPerDay: "Moves with the radio's data rate and the time spent transmitting, and with what the instruments record. Watch the link margin.",
+};
+
+/**
+ * What this mission needs, goal by goal: where the design stands now, how far it has to go, and what moves it.
+ * This is the mission's own problem in numbers: its place decides the orbit's tilt, its question decides how fine
+ * the imagery must be and how much data must come home.
+ */
+function MissionNeeds({ c, ask }: { c: Ctx; ask(text: string): void }) {
+  const [adding, setAdding] = useState<string | null>(null);
+  const defs: any[] = (c.snap.scenario as any).objectives ?? [];
+  const results = (c.snap.evaluation.objectives as any[]).filter((o) => o.category === "science" && !o.stretch);
+  const catalog: any[] = c.snap.scenario.catalog;
+  const cadet = c.snap.session.difficulty === "cadet";
+  const show = (v: number | null, unit: string): string => (v === null || v === undefined ? "–" : `${Math.abs(v) >= 100 ? v.toFixed(0) : Number(v.toPrecision(3))}${unit ? ` ${unit}` : ""}`);
+  const add = async (itemId: string): Promise<void> => {
+    setAdding(itemId);
+    try { await api("POST", `/api/sessions/${c.sid}/catalog`, { itemId }); c.reloadLists(); } catch (err) { c.toast((err as Error).message, "bad"); }
+    setAdding(null);
+  };
+  if (!results.length) return null;
+  return (
+    <div className="needs">
+      <div className="eyebrow">What this mission needs</div>
+      {results.map((r) => {
+        const def = defs.find((d) => d.id === r.id);
+        const metric = def?.metric ?? {};
+        const done = r.achieved >= 1;
+        const item = metric.type === "instrument" ? [...catalog].filter((i) => i.component.kind === metric.kind).sort((x, y) => x.component.costMusd - y.component.costMusd)[0] : null;
+        const state = metric.type === "instrument" ? (done ? "on board" : "not on board") : r.value === null ? "nothing measures this yet" : `now ${show(r.value, r.unit)} · needs ${show(r.target, r.unit)}`;
+        const how = metric.type === "instrument" ? (item ? `Carry it: ${String(item.label).split(" · ")[0]} (${fmt(item.component.massKg)} kg, $${fmt(item.component.costMusd)}M${item.component.powerW ? `, ${item.component.powerW} W` : ""}).` : "No part in this mission's catalogue does this: ask your AI to build one.") : (MOVES[metric.field] ?? "");
+        return (
+          <div key={r.id} className={`need ${done ? "met" : r.achieved > 0 ? "part" : "open"}`}>
+            <div className="row between" style={{ gap: 6 }}>
+              <button className="t" title={`${def?.description ?? ""} Click to ask your AI about it.`} onClick={() => ask(done ? `How much room do we have on "${r.title}"?` : `"${r.title}" is not met (${state}). What ways are there to get there, and what does each cost?`)}><b>{done ? "✓" : r.achieved > 0 ? "◐" : "✗"}</b> {r.title}</button>
+              <span className="s">{state}</span>
+            </div>
+            {metric.type !== "instrument" && <div className="bar"><i style={{ width: `${Math.round(r.achieved * 100)}%` }} /></div>}
+            {!done && <div className="how">{metric.type === "instrument" ? `Needs a ${String(metric.kind).replace(/_/g, " ")} on board. ` : def?.description ? `${def.description} ` : ""}{how}</div>}
+            {!done && cadet && item && !locked(c) && <button className="btn sm" disabled={adding !== null} onClick={() => void add(item.id)}>{adding === item.id ? <span className="spinner" /> : `Add ${String(item.label).split(" · ")[0]}`}</button>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function ProblemPanel({ c, onDefine }: { c: Ctx; onDefine(): void }) {
   const [adding, setAdding] = useState<string | null>(null);
   const [open, setOpen] = useState<"controls" | "parts" | "crew">("controls");
@@ -84,7 +136,8 @@ export function ProblemPanel({ c, onDefine }: { c: Ctx; onDefine(): void }) {
     try { await api("POST", `/api/sessions/${c.sid}/catalog`, { itemId }); c.reloadLists(); } catch (err) { c.toast((err as Error).message, "bad"); }
     setAdding(null);
   };
-  const ask = (text: string): void => bus.send("ask", text);
+  // Questions about the mission as a whole go to the mission thread, not to whichever part happens to be selected.
+  const ask = (text: string): void => { c.setSelected(null); setTimeout(() => bus.send("ask", text), 0); };
   if (!kit) return null;
   return (
     <div className="problem">
@@ -92,18 +145,19 @@ export function ProblemPanel({ c, onDefine }: { c: Ctx; onDefine(): void }) {
       <h2>{brief?.title ?? c.snap.scenario.title}</h2>
       <p className="statement">{brief?.problem ?? c.snap.scenario.briefing[1] ?? c.snap.scenario.tagline}</p>
       <div className="crux">{kit.crux}</div>
+      {session.world?.target && <div className="faint" style={{ fontSize: 11, margin: "-4px 0 8px" }} title="Marked in orange on the world in the Orbit view. The coordinates are approximate.">◎ About <b style={{ color: "#ffb020" }}>{session.world.target.name}</b> · {Math.abs(session.world.target.latDeg).toFixed(1)}°{session.world.target.latDeg >= 0 ? "N" : "S"} {Math.abs(session.world.target.lonDeg).toFixed(1)}°{session.world.target.lonDeg >= 0 ? "E" : "W"} · spacecraft <b>{c.snap.mission.config.spacecraft.name}</b></div>}
       {!c.snap.game.charter && session.mode !== "sandbox" && !locked(c) && <button className="btn sm" onClick={onDefine}>Say what your crew is going for</button>}
 
+      <MissionNeeds c={c} ask={ask} />
       {ev.outcome && (
-        <div className={`outcome ${ev.outcome.verdict}`} title={ev.outcome.rule}>
+        <div className={`outcome ${ev.outcome.verdict}`} title={`${ev.outcome.rule} Success = all four hold after the flight. Click a line to ask your AI about it.`}>
           <div className="eyebrow">Does the mission work?</div>
           <div className="headline">{ev.outcome.headline}</div>
           {ev.outcome.conditions.map((k: any) => (
             <button key={k.id} className={`cond ${k.met === null ? "open" : k.met ? "met" : "unmet"}`} title="Ask your AI about this" onClick={() => ask(k.met ? `How much room do we have on this: "${k.title}"? (${k.evidence})` : `"${k.title}" is not met yet (${k.evidence}). What ways are there to get there, and what does each cost?`)}>
-              <span className="mark">{k.met === null ? "–" : k.met ? "✓" : "✗"}</span><span className="t">{k.title}</span><span className="e">{k.evidence}</span>
+              <span className="mark">{k.met === null ? "–" : k.met ? "✓" : "✗"}</span><span className="t" title={k.evidence}>{k.title}</span>{(k.met !== true || k.id === "flight") && <span className="e">{k.evidence}</span>}
             </button>
           ))}
-          <div className="ends">The mission is over when the lead submits it (Review). It counts as a success when all of these hold after the flight (Analysis → fly). Click a line to ask your AI about it.</div>
         </div>
       )}
 
@@ -113,6 +167,14 @@ export function ProblemPanel({ c, onDefine }: { c: Ctx; onDefine(): void }) {
         <span className="score" title="The score is secondary: it adds up how well each goal is met and how carefully the crew worked. Whether the mission works is above."><b>{ev.score.toFixed(0)}</b> pts</span>
       </div>
 
+      {c.snap.knowledge && (
+        <details className="learned">
+          <summary title="Every flight, trade study and idea that did not hold is added to the research archive. Your AI reads what bears on this mission before it answers; the language model itself is not retrained.">What the AI has learned · <b>{c.snap.knowledge.records.toLocaleString("en-US")}</b> records{c.snap.knowledge.lessons.length ? ` · ${c.snap.knowledge.lessons.length} about missions like this` : ""}</summary>
+          {c.snap.knowledge.lessons.length === 0 && <p className="faint">No other crew has flown this kind of mission here yet. What your crew finds out will be the first entry the next crew's AI reads.</p>}
+          {c.snap.knowledge.lessons.map((l, i) => <p key={i}><span className="chip" style={{ fontSize: 9 }}>{l.kind.replace(/_/g, " ")}</span> {l.text} <i className="faint">— {l.mission}</i></p>)}
+          <button className="btn sm ghost" onClick={() => ask("What have earlier crews learned on missions like this one that we should use?")}>Ask my AI what to take from this</button>
+        </details>
+      )}
       <div className="kit-tabs">
         {(["controls", "parts", "crew"] as const).map((t) => <button key={t} className={open === t ? "on" : ""} onClick={() => setOpen(t)}>{t === "controls" ? `Controls · ${kit.levers.length}` : t === "parts" ? `Parts · ${kit.toolbox.length}` : `Crew · ${session.members.length}/4`}</button>)}
       </div>
@@ -125,7 +187,7 @@ export function ProblemPanel({ c, onDefine }: { c: Ctx; onDefine(): void }) {
             const have = c.snap.mission.config.spacecraft.components.filter((x: any) => x.name === item.component.name).length;
             return (
               <div key={t.itemId} className="tool">
-                <div><b>{item.label.split(" · ")[0]}</b>{have > 0 && <span className="chip ok" style={{ marginLeft: 6 }}>on board{have > 1 ? ` ×${have}` : ""}</span>}<div className="meta">{fmt(item.component.massKg)} kg · ${fmt(item.component.costMusd)}M{item.component.powerW ? ` · ${item.component.powerW} W` : ""}</div><div className="why">{t.why}</div></div>
+                <div><b>{item.label.split(" · ")[0]}</b>{item.tier === "advanced" && <span className="chip warn" style={{ marginLeft: 6, fontSize: 9 }} title="Does more and asks more than the simple choice">advanced</span>}{have > 0 && <span className="chip ok" style={{ marginLeft: 6 }}>on board{have > 1 ? ` ×${have}` : ""}</span>}<div className="meta">{fmt(item.component.massKg)} kg · ${fmt(item.component.costMusd)}M{item.component.powerW ? ` · ${item.component.powerW} W` : ""}</div><div className="why">{t.why}</div></div>
                 <button className="btn sm" disabled={locked(c) || adding !== null} onClick={() => add(item.id)}>{adding === item.id ? <span className="spinner" /> : "Add"}</button>
               </div>
             );

@@ -60,7 +60,7 @@ check("the part card lists the part's ports and says which are open", /Ports & l
 await page.locator(".right .tabs .tab", { hasText: /^systems$/i }).click();
 await page.waitForTimeout(500);
 await page.screenshot({ path: path.join(out, "03-systems-tab-needs-connection.png") });
-check("the Systems tab lists every line with what it carries", (await page.locator(".systems table.lines tr").count()) === snap1.mission.config.systems.links.length);
+check("the Systems tab lists every line with what it carries", (await page.locator(".systems .lines .wline").count()) === snap1.mission.config.systems.links.length);
 
 // Connect it.
 await page.locator(".part-card").getByRole("button", { name: "Connect it" }).click();
@@ -85,5 +85,5 @@ await page.screenshot({ path: path.join(out, "05-systems-tab-connected.png") });
 
 say(`console/page errors: ${problems.length ? problems.join(" || ") : "none"}`);
 fs.writeFileSync(path.resolve("reports/evidence/ui-systems.md"), lines.join("\n") + "\n");
-await browser.close();
+await Promise.race([browser.close(), new Promise((r) => setTimeout(r, 8000))]); // closing a headless browser can hang while another Edge is open
 process.exit(lines.some((l) => l.startsWith("FAIL")) ? 1 : 0);

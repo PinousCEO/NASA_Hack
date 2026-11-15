@@ -1,16 +1,15 @@
-PASS · Unit and integration tests: 153 passed, 0 failed (10 s)
-PASS · Browser end-to-end suite: 51 passed, 0 failed (183 s)
-(node:45636) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+PASS · Unit and integration tests: 157 passed, 0 failed (8 s)
+PASS · Browser end-to-end suite: 51 passed, 0 failed (165 s)
+(node:42352) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
 (Use `node --trace-deprecation ...` to show where the warning was created)
-PASS · Wiring loop in the UI: 9 passed, 0 failed (29 s)
-FAIL · Power-short mission: flight with control logic in the UI: 0 passed, 1 failed (1 s)
-FAIL · the mission board carries the power-short problem
-TypeError: Cannot read properties of undefined (reading 'template')
-PASS · Soak: four clients, 600 edits: 6 passed, 0 failed (18 s)
-PASS · Controls scan (labels, reasons for disabled): 18 passed, 0 failed (36 s)
-PASS · Four clients: sync, latency, conflicts, reconnect: 17 passed, 0 failed (12 s)
-PASS · Web ↔ MR loop: 13 passed, 0 failed (27 s)
-PASS · Play-through: CubeSat: 9 passed, 0 failed (29 s)
-PASS · Play-through: Mars orbiter: 9 passed, 0 failed (43 s)
-PASS · Play-through: lunar prospector: 9 passed, 0 failed (25 s)
-PASS · Two players, their own AIs: 12 passed, 0 failed (75 s)
+PASS · Wiring loop in the UI: 9 passed, 0 failed (28 s)
+PASS · Power-short mission: flight with control logic in the UI: 8 passed, 0 failed (12 s)
+PASS · Soak: four clients, 600 edits: 6 passed, 0 failed (13 s)
+PASS · Controls scan (labels, reasons for disabled): 18 passed, 0 failed (39 s)
+PASS · Four clients: sync, latency, conflicts, reconnect: 17 passed, 0 failed (3 s)
+PASS · Web ↔ MR loop: 13 passed, 0 failed (25 s)
+PASS · Play-through: CubeSat: 9 passed, 0 failed (1 s)
+PASS · Play-through: Mars orbiter: 9 passed, 0 failed (1 s)
+PASS · Play-through: lunar prospector: 9 passed, 0 failed (1 s)
+
+306 passed, 0 failed across 11 runs → reports/evidence/summary.md

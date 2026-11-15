@@ -38,11 +38,15 @@ export interface Evaluation {
   outcome?: MissionOutcome; score: number; grade: string; objectivesScore: number; rigorScore: number; penalties: { reason: string; points: number }[]; categories: Record<string, { earned: number; possible: number }>; objectives: ObjectiveResult[]; rigor: { item: string; earned: number; possible: number; detail: string }[]; strengths: string[]; improvements: string[]; simulated: boolean; basis: string }
 export interface Maturity { level: number; levelName: string; criteria: { level: number; id: string; description: string; met: boolean; evidence: string }[]; nextSteps: string[]; basis: string }
 export interface MissionVersion { version: number; config: any; derived: Record<string, { value: any; assumptions: string[]; verification: string; error?: string }>; recalculated: string[]; changedPaths?: string[]; publishedAt: string; publishedBy: string; note: string }
-export interface Presence { clientId: string; accountId: string; displayName: string; color: string; mode: "desktop" | "xr"; role?: string; discipline?: string | null; head?: number[] | null; hands?: { left: number[] | null; right: number[] | null }; focus?: string | null }
+export interface Presence { clientId: string; accountId: string; displayName: string; color: string; mode: "desktop" | "xr"; role?: string; discipline?: string | null; head?: number[] | null; hands?: { left: number[] | null; right: number[] | null }; focus?: string | null; /** A place on the world they are pointing at: [latitude, east longitude] in degrees. */ point?: number[] | null }
 export interface Snapshot {
   session: any; mission: MissionVersion; checks: Check[]; game: any; maturity: Maturity; evaluation: Evaluation; locks: Record<string, string>;
   scenario: { id: string; title: string; tagline: string; briefing: string[]; scienceQuestions: string[]; references: string[]; catalog: any[]; disciplines: { id: string; name: string; description: string }[] };
   versions: any[]; you?: any; inviteCode?: string;
+  /** What crews before this one learned on the same kind of mission (the record the AI reads), and how many records there are in all. */
+  knowledge?: { lessons: { kind: string; text: string; mission: string; at: string }[]; records: number };
+  /** The roles this problem came with: what each answers for, whether that holds now, and who has taken it. */
+  roles?: { seat: string; holder: string | null; label: string; ok: boolean; detail: string }[];
   systemsGuide?: { ports: Record<string, { name: string; kind: string; dir: string; unit: string; label: string }[]>; signals: { name: string; unit: string; meaning: string }[]; targets: string[] };
 }
 
@@ -77,3 +81,10 @@ export function go(url: string): void {
   if (viaShell) viaShell(url);
   else window.location.assign(url);
 }
+
+/** A moment as the product writes it everywhere: "15 Nov 2026, 05:30" in the viewer's time zone, in English whatever the browser's language. */
+export const whenText = (at: string | number | Date): string => new Date(at).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+/** A day: "15 Nov 2026". */
+export const dayText = (at: string | number | Date): string => new Date(at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+/** A time of day: "05:30:24". */
+export const clockText = (at: string | number | Date): string => new Date(at).toLocaleTimeString("en-GB", { hour12: false });

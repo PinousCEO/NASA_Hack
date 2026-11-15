@@ -9,8 +9,16 @@
   "minutesAvailableAtStart": 533,
   "continuation": "Project Stop hook (.claude/settings.json → .claude/nightshift-stop.cjs). Stop file: NIGHTSHIFT_STOP in the project root.",
   "baseCommit": "d759b5b",
-  "current": "added ui-flight and soak to run-all-evidence; next: final run-all-evidence + build-report near the end, respond to user test feedback",
-  "next": "optional polish only if it serves the user's stated vision",
-  "blockers": [],
-  "updatedAt": "2026-11-15 01:07:21 KST"
+  "current": "All requirements verified except the physical headset (R-XR-03, external). Full no-model verification 382/382 over 16 runs, twice in a row on the final code (07:16 and 07:35 KST); final report built (PDF + md). Uncommitted since e8b1298",
+  "next": "final message at 08:00; commit and push only if the user asks",
+  "blockers": [
+    "R-XR-03: no physical MR headset can be operated from this session (emulator-level verification only)"
+  ],
+  "updatedAt": "2026-11-15 07:45:27 KST",
+  "notVerified": [
+    "Live-model UI checks (ui-crew, ui-fullflow, ui-chat) were last run 01:01-01:32 KST; later changes were checked without the model (382 checks) and with 4 single live requests",
+    "Real GMAT run",
+    "Real network latency"
+  ],
+  "finalVerification": "2026-11-15 07:16-07:26 KST: 382 passed, 0 failed across 16 runs (no language model); unit tests 159; report 26 pages"
 }

@@ -85,6 +85,9 @@ for (const [i, text] of questions.entries()) {
   const after = await state();
   say(`world: ${brief(before)} → ${brief(after)}${before.mission.version === after.mission.version ? " (shared world unchanged)" : ""}`);
 }
+const used = (await call("GET", "/api/llm-usage")).body;
+say("");
+say("model usage on this server since it started: " + JSON.stringify(used?.usage ?? null));
 const file = path.join("reports", "evidence", `${name}.md`);
 fs.mkdirSync(path.dirname(file), { recursive: true });
 fs.writeFileSync(file, out.join("\n") + "\n");

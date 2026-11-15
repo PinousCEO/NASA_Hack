@@ -9,11 +9,11 @@ PASS  the mission opens on the problem, with nothing in the way
 PASS  the crew can define its mission from the problem panel
 PASS  the mission definition reshapes the scored objectives (primary and stretch goal)
 PASS  the planet is textured from NASA imagery (not the procedural fallback)  — LROC WAC tiles through the platform proxy
-PASS  the 3D stage is actually drawing (lit pixels in a screenshot of the canvas)  — 8900 of 10000 sampled pixels lit
+PASS  the 3D stage is actually drawing (lit pixels in a screenshot of the canvas)  — 8962 of 10000 sampled pixels lit
 PASS  spatial XR panels stay hidden on the desktop
 PASS  both participants see each other in the crew bar
 PASS  dragging the Moon turns it and moves the mission clock (a turn of the Moon is a month)  — clock moved 1.55 days
-PASS  the Sun's direction and the Moon's phase follow the clock  — lit fraction 48% → 63%
+PASS  the Sun's direction and the Moon's phase follow the clock  — lit fraction 100% → 97%
 PASS  the other participant's scene shows the same moment  — 0 s apart
 PASS  the clock deck shows what is true at that moment and what the models say
 PASS  the problem arrives with its kit: the crux, its controls and its parts  — 4 controls

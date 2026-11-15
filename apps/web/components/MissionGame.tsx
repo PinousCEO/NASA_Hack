@@ -5,7 +5,7 @@
  * met. All numbers come from the server; nothing here computes a score.
  */
 import { useCallback, useEffect, useState } from "react";
-import { api, fmt } from "@/lib/api";
+import { api, fmt, clockText } from "@/lib/api";
 import type { Ctx } from "./MissionPanels";
 import { Modal } from "./Modal";
 
@@ -221,7 +221,7 @@ export function DesignsPanel({ c }: { c: Ctx }) {
       {lists.saved.length === 0 && <p className="dim" style={{ fontSize: 12 }}>Nothing saved yet.</p>}
       {lists.saved.map((d) => (
         <div key={d.id} className="row between objective">
-          <span style={{ fontSize: 13 }}><b>{d.name}</b><div className="faint mono" style={{ fontSize: 11 }}>v{d.version} · {new Date(d.at).toLocaleTimeString()}</div></span>
+          <span style={{ fontSize: 13 }}><b>{d.name}</b><div className="faint mono" style={{ fontSize: 11 }}>v{d.version} · {clockText(d.at)}</div></span>
           <button className="btn sm ghost" onClick={() => { setA("head"); setB(String(d.version)); }}>Compare</button>
         </div>
       ))}

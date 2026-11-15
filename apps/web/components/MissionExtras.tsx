@@ -223,6 +223,9 @@ export function whyItChanged(changedPaths: string[] | undefined): string | null 
   if (p.includes("semiMajorAxisKm")) return "Altitude changed. Lower orbits give sharper measurements but longer eclipses and shorter radio contacts; higher orbits trade detail for power and link time.";
   if (p.includes("inclinationDeg")) return "Inclination changed. It sets which latitudes you fly over: near 90° reaches the poles, but launch vehicles lift less into polar orbits and the lighting changes.";
   if (p.includes("raanDeg") || p.includes("missionTime")) return "The orbit's angle to the Sun changed. That moves how much of each orbit is in shadow, so power and battery numbers move with it.";
+  // Wiring and control logic come before the parts list: connecting a part also touches the part it is connected to.
+  if (p.includes("systems.controllers")) return "The control logic on board changed. It runs every day of the flight and commands the parts; nothing moves here until you fly the mission — the flight shows what it did.";
+  if (p.includes("systems.links")) return "The wiring changed. A part works only through its lines: a connected instrument now draws its power and its data counts, and the lines add a little mass. A line that is too small holds its part back.";
   if (p.includes("spacecraft.components") || p.includes("scene.nodes")) return "The parts list changed. Every part adds mass, cost and build time; instruments also draw power and create data that the antenna has to send home. Attitude control sharpens images; a computer compresses and stores data.";
   if (p.includes("rover")) return "The rover changed. Its mass rides on the same launch, and its wheels and power decide which slopes it can climb.";
   return null;
@@ -282,7 +285,7 @@ export function LaunchPicker({ c }: { c: Ctx }) {
         const fits = o.capacityKg >= launch.launchMassKg;
         return (
           <button key={o.id} className={`preset ${launch.selectedId === o.id ? "on" : ""}`} disabled={locked} onClick={() => void c.collab.edit([{ op: "set", path: "meta.launchVehicleId", value: o.id }], `Launch vehicle → ${o.name}`).then((r) => { if (!r.ok) c.toast(r.detail ?? "Not accepted", "warn"); })}>
-            <b>{o.name} · lifts {fmt(o.capacityKg)} kg · ${fmt(o.costMusd)}M <span className={`chip ${fits ? "ok" : "bad"}`} style={{ marginLeft: 6 }}>{fits ? "fits" : "too heavy"}</span></b>
+            <b style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}><span>{o.name} · lifts {fmt(o.capacityKg)} kg · ${fmt(o.costMusd)}M</span><span className={`chip ${fits ? "ok" : "bad"}`} style={{ flex: "none" }}>{fits ? "fits" : "too heavy"}</span></b>
             <span>{o.summary}</span>
           </button>
         );

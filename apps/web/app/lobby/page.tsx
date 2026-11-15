@@ -48,7 +48,7 @@ export default function Lobby() {
     setError(null);
     try {
       const created = await api("POST", "/api/sessions", { scenarioId: selected, ...form, ...(brief ? { briefId: brief.id } : {}) });
-      navigate(`/mission?s=${created.session.id}`);
+      navigate(`/mission?s=${created.session.id}&new=1`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create the mission");
       setBusy(false);
@@ -89,7 +89,7 @@ export default function Lobby() {
               <button key={s.id} className={`glass scenario-card fade-in ${selected === s.id ? "selected" : ""}`} style={{ animationDelay: `${i * 0.08}s`, color: "inherit" }} onClick={() => setSelected(s.id)}>
                 <div className={`orb ${s.destination}`} />
                 <div className="eyebrow">{s.destination}</div>
-                <h3 style={{ fontSize: 19, margin: "10px 0 8px", maxWidth: "15ch" }}>{s.title}</h3>
+                <h3>{s.title}</h3>
                 <p className="dim">{s.tagline}</p>
               </button>
             ))}

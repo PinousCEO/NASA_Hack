@@ -44,6 +44,12 @@ export interface RequestServiceDeps {
   stagingDir: string;
 }
 
+/**
+ * Used for replies to direct actions (a catalogue pick, a connection): the reply is assembled from the measured
+ * results, and the language model is not asked. Only what a player says to their AI is worth a model request.
+ */
+const NO_MODEL: LlmService = { modelId: "none", status: () => ({ available: false, reason: "Not needed for a direct action" }), structured: () => Promise.reject(new Error("no model for direct actions")) };
+
 const TERMINAL: RequestStatus[] = ["completed", "infeasible", "awaiting_clarification", "awaiting_approval", "published", "rejected", "failed", "cancelled"];
 
 export class RequestService extends EventEmitter<RequestEvents> {
@@ -86,10 +92,17 @@ export class RequestService extends EventEmitter<RequestEvents> {
   /** This player's earlier exchanges with their AI, oldest first: each player has their own thread. */
   private conversation(record: RequestRecord): { said: string; replied: string; outcome: string }[] {
     return [...this.requests.values()]
-      .filter((r) => r.id !== record.id && r.user.id === record.user.id && !r.action && r.answer?.text && r.createdAt <= record.createdAt)
+      .filter((r) => r.id !== record.id && r.user.id === record.user.id && !r.action && (r.topic ?? "") === (record.topic ?? "") && r.answer?.text && r.createdAt <= record.createdAt)
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
       .slice(-6)
       .map((r) => ({ said: r.text.slice(0, 500), replied: r.answer!.text.slice(0, 700), outcome: r.answer!.verdict }));
+  }
+
+  /** What this thread is about, for the model: the part it was opened on. */
+  private topicContext(record: RequestRecord, mission: MissionVersion): string {
+    if (!record.topic) return "This thread is about the mission as a whole.";
+    const part = [...mission.config.spacecraft.components, ...(mission.config.rover?.components ?? [])].find((c) => c.id === record.topic);
+    return part ? `This thread was opened on one part: ${part.name} (id ${part.id}, ${part.type}). "It", "this" and "the part" mean that part unless the player says otherwise.` : "This thread was opened on a part that is no longer on the spacecraft.";
   }
 
   /** Share a conversation with the crew, or take it back. Only its owner can. */
@@ -105,7 +118,7 @@ export class RequestService extends EventEmitter<RequestEvents> {
   }
 
   /** Start processing a request. Returns immediately; use `wait` or the `updated` event to follow it. */
-  submit(args: { text: string; user: User; trainingConsent?: boolean }): RequestRecord {
+  submit(args: { text: string; user: User; trainingConsent?: boolean; topic?: string }): RequestRecord {
     const text = args.text.trim();
     if (!text) throw new Error("Request text is empty");
     const record: RequestRecord = {
@@ -119,6 +132,7 @@ export class RequestService extends EventEmitter<RequestEvents> {
       similarPastWork: [],
       planIssues: [],
       trace: [],
+      ...(args.topic ? { topic: args.topic } : {}),
     };
     this.requests.set(record.id, record);
     this.start(record);
@@ -308,7 +322,7 @@ export class RequestService extends EventEmitter<RequestEvents> {
     const preset = this.structured.get(record.id);
     const requirement: StructuredRequirement = preset
       ? { id: newId("req"), originalText: record.text, summary: record.text, operations: preset, missingInformation: [], analysis: { method: "rule_based", verification: "deterministic_calculation" }, missionVersionInspected: mission.version }
-      : await this.analyzer.analyze(record.text, mission, signal, this.conversation(record), this.deps.playerContext?.(record.user.id) ?? "");
+      : await this.analyzer.analyze(record.text, mission, signal, this.conversation(record), [this.deps.playerContext?.(record.user.id) ?? "", this.topicContext(record, mission)].filter(Boolean).join("\n"));
     record.requirement = requirement;
     this.trace(record, "analysis", `Requirement analysed (${requirement.analysis.method}): ${requirement.summary}`, {
       method: requirement.analysis.method,
@@ -354,7 +368,7 @@ export class RequestService extends EventEmitter<RequestEvents> {
     this.trace(record, "feasibility", `Feasibility: ${feasibility.classification} — ${feasibility.summary}`, { factors: feasibility.factors, suggestedModifications: feasibility.suggestedModifications, evidenceBasis: feasibility.evidenceBasis });
     if (!feasibility.proceed) {
       this.remember(record, "failure", `Not executed (${feasibility.classification}): ${requirement.summary}`, { feasibility }, "deterministic_calculation");
-      record.answer = await composeAnswer(record, this.deps.llm, signal);
+      record.answer = await composeAnswer(record, record.action ? NO_MODEL : this.deps.llm, signal);
       return this.setStatus(record, "infeasible");
     }
 
@@ -398,7 +412,7 @@ export class RequestService extends EventEmitter<RequestEvents> {
     if (draft.isEmpty) {
       draft.discard();
       // A question was asked: say the answer, not just that the tools ran.
-      record.answer = await composeAnswer(record, this.deps.llm, signal);
+      record.answer = await composeAnswer(record, record.action ? NO_MODEL : this.deps.llm, signal);
       if (record.answer) this.trace(record, "execution", `Answer composed (${record.answer.wording === "language_model" ? `wording by ${record.answer.modelId}, model judgement` : "from the results by template"}); the values come from ${[...new Set(record.answer.facts.map((f) => f.source))].join(", ") || "the feasibility assessment"}`);
       return this.setStatus(record, "completed");
     }
@@ -412,7 +426,7 @@ export class RequestService extends EventEmitter<RequestEvents> {
     });
     this.remember(record, "validation_report", `Validation of proposed change: ${requirement.summary}`, { tests: proposal.tests, consequences: proposal.preview.consequences }, "deterministic_calculation");
     // Say what was built and what the engineering models measured, before anyone has to decide.
-    record.answer = await composeBuildReply(record, proposal, this.deps.llm, signal);
+    record.answer = await composeBuildReply(record, proposal, record.action ? NO_MODEL : this.deps.llm, signal);
     this.emit("proposal", proposal);
     this.setStatus(record, "awaiting_approval");
   }

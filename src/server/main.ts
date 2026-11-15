@@ -32,8 +32,17 @@ for (const d of all.filter((c) => !platform.registry.isUsable(c))) {
 }
 const llm = platform.llm.status();
 // New mission briefs every day: top up at start-up and every few hours while the server runs.
-void platform.briefs.ensureDaily(6).then(() => console.log(`Mission briefs: ${JSON.stringify(platform.briefs.status())}`));
-setInterval(() => void platform.briefs.ensureDaily(6), 3 * 3600 * 1000).unref();
+void platform.briefs.ensureDaily(6).then(() => console.log(`Mission briefs: ${JSON.stringify(platform.briefs.status())}`)).then(() => platform.briefs.backfillWorlds()).then((n) => { if (n) console.log(`Mission briefs: ${n} earlier brief(s) now have a world of their own (place, kind of site, what they need to see).`); });
+// The AI keeps writing missions by itself: every 20 minutes it checks whether enough unplayed missions are on the board
+// and writes more if not (the same check runs whenever a crew takes one). BRIEF_AUTOGEN=off turns this off;
+// BRIEF_DAILY_CAP, when set, bounds how many it may write in a day (no bound by default: it writes only when the board runs low).
+if (process.env.BRIEF_AUTOGEN !== "off") {
+  const supply = (): void => void platform.briefs.keepSupplied((id) => (platform.sessions.briefStats()[id]?.crews ?? 0) > 0, process.env.BRIEF_DAILY_CAP ? { dailyCap: Number(process.env.BRIEF_DAILY_CAP) } : {}).then((made) => { if (made.length) console.log(`New mission(s) on the board: ${made.map((b) => `${b.title} (${b.origin})`).join("; ")}`); });
+  setInterval(supply, 20 * 60 * 1000).unref();
+}
+// What the model has been asked so far, every ten minutes while there is something new to report.
+let reported = 0;
+setInterval(() => { const u = platform.llm.usage?.(); if (u && u.calls > reported) { reported = u.calls; console.log(`Language model so far: ${u.calls} requests · ${u.inputTokens} input tokens (${u.cachedInputTokens} cached) · ${u.outputTokens} output tokens (${u.reasoningTokens} reasoning) · ${Object.entries(u.byPurpose).map(([k, v]) => `${k}: ${v.calls}`).join(", ")}`); } }, 10 * 60 * 1000).unref();
 console.log(llm.available ? `Language model: ${platform.llm.modelId}` : `Language model unavailable — using the rule-based analyser. ${llm.reason}`);
 const chain = platform.audit.verify();
 console.log(chain.ok ? `Audit log: ${chain.entries} entr${chain.entries === 1 ? "y" : "ies"}, chain intact` : `AUDIT LOG CHAIN BROKEN at entry ${chain.brokenAt}`);

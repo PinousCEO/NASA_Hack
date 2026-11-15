@@ -12,7 +12,7 @@ const out = [];
 const say = (s) => { console.log(s); out.push(s); };
 say(`# Clean run of the final build — ${new Date().toISOString()}`);
 say(`data folder: new and empty (${path.basename(dataDir)}) · port ${PORT} · web client: apps/web/out built ${fs.statSync("apps/web/out/index.html").mtime.toISOString()}`);
-const server = spawn(process.execPath, ["--import", "tsx", "src/server/main.ts"], { env: { ...process.env, PORT: String(PORT), MISSION_DATA_DIR: dataDir }, stdio: ["ignore", "pipe", "pipe"] });
+const server = spawn(process.execPath, ["--import", "tsx", "src/server/main.ts"], { env: { ...process.env, PORT: String(PORT), MISSION_DATA_DIR: dataDir, BRIEF_AUTOGEN: "off", ...(process.argv.includes("--live") ? {} : { OPENAI_API_KEY: "", ANTHROPIC_API_KEY: "", ANTHROPIC_AUTH_TOKEN: "", LLM_PROVIDER: "" }) }, stdio: ["ignore", "pipe", "pipe"] });
 let log = "";
 server.stdout.on("data", (d) => (log += d));
 server.stderr.on("data", (d) => (log += d));

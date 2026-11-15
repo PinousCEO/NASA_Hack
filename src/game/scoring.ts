@@ -110,6 +110,53 @@ function metricValue(o: Objective, config: MissionConfig, derived: Derived, chec
   }
 }
 
+/** What a crew role looks after: one thing on the mission that must hold, read from the engineering models. */
+export interface RoleWatch { seat: string; holder: string | null; label: string; ok: boolean; detail: string }
+
+/**
+ * The priority a role stands for. Roles come with the problem under names of their own ("Power", "Payload",
+ * "Flight dynamics", "Systems lead"…); the name decides which part of the mission the role answers for. The
+ * priorities pull against each other on purpose: the payload seat wants more instruments, the power and
+ * systems seats pay for them.
+ */
+export function roleWatch(seat: string, config: MissionConfig, derived: Derived, checks: ConstraintCheck[], results: ObjectiveResult[]): { label: string; ok: boolean; detail: string } {
+  const name = seat.toLowerCase();
+  const value = (id: string): Record<string, any> => (derived[id]?.value ?? {}) as Record<string, any>;
+  const num = (v: unknown): string => (typeof v === "number" && Number.isFinite(v) ? (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1)) : "–");
+  const failing = (re: RegExp) => checks.filter((c) => c.status === "fail" && re.test(c.id));
+  if (/power|energy|electric|batter/.test(name)) {
+    const p = value("power.budget");
+    const ok = typeof p.marginW === "number" && p.marginW >= 0 && p.batteryAdequate !== false;
+    return { label: "Keep power positive", ok, detail: `${num(p.marginW)} W margin${p.batteryAdequate === false ? ", battery too small" : ""}` };
+  }
+  if (/comm|link|radio|ground|downlink|telecom|relay/.test(name)) {
+    const l = value("comms.link");
+    const ok = typeof l.worstMarginDb === "number" && l.worstMarginDb >= 3;
+    return { label: "Hold 3 dB of link margin", ok, detail: `${num(l.worstMarginDb)} dB at worst` };
+  }
+  if (/software|control|autonom|operation|logic/.test(name)) {
+    const on = (config.systems?.controllers ?? []).filter((k) => k.enabled !== false).length;
+    return { label: "Control logic on board", ok: on > 0, detail: on ? `${on} controller${on === 1 ? "" : "s"} running` : "none yet" };
+  }
+  if (/payload|science|instrument|imag|observ|data/.test(name)) {
+    const science = results.filter((r) => r.category === "science" && !r.stretch);
+    const possible = science.reduce((s, r) => s + r.weight, 0) || 1;
+    const share = science.reduce((s, r) => s + r.points, 0) / possible;
+    return { label: "Reach 90% of the science", ok: share >= 0.9, detail: `${Math.round(share * 100)}% of the science credit` };
+  }
+  if (/orbit|dynamics|trajector|navigat|mission design|coverage/.test(name)) {
+    const mine = results.filter((r) => ["polar", "coverage", "footprint", "imaging", "survive"].includes(r.id));
+    const open = mine.filter((r) => r.achieved < 1);
+    return { label: "An orbit that serves the science", ok: mine.length > 0 && open.length === 0, detail: open.length ? `still open: ${open.map((r) => r.title).join(", ")}` : "coverage, resolution and seasons hold" };
+  }
+  if (/system|lead|manag|budget|cost|program|integrat|mass|structure|launch|chief/.test(name)) {
+    const bad = failing(/mass|cost|launch|schedule/);
+    return { label: "Stay inside mass, cost and schedule", ok: bad.length === 0, detail: bad.length ? bad.map((c) => c.description).join("; ") : "all inside the limits" };
+  }
+  const bad = checks.filter((c) => c.status === "fail");
+  return { label: "No limit broken", ok: bad.length === 0, detail: bad.length ? `${bad.length} limit(s) broken` : "every check holds" };
+}
+
 export function evaluateMission(args: {
   objectives: Objective[];
   config: MissionConfig;
@@ -119,6 +166,8 @@ export function evaluateMission(args: {
   maturity: MaturityAssessment;
   contributors: number;
   unverifiedContent: number;
+  /** Roles crew members have taken (seat → who). With two or more taken, the team is also scored on each role's priority holding. */
+  roles?: Record<string, string>;
 }): Evaluation {
   const { objectives, config, derived, checks, simulation, maturity } = args;
   const results: ObjectiveResult[] = objectives.map((o) => {
@@ -154,6 +203,14 @@ export function evaluateMission(args: {
     { item: "Concept maturity", earned: Math.min(4, maturity.level) * 3, possible: 12, detail: `CML ${maturity.level} (${maturity.levelName}); 3 points per level up to CML 4.` },
     { item: "Collaboration", earned: Math.min(3, args.contributors), possible: 3, detail: `${args.contributors} team member(s) contributed design changes.` },
   ];
+  // A crew that split the work is judged as a crew: each role taken stands for a priority, and the team earns a
+  // point for every one that holds in the final design. One player's gain that breaks another's priority costs it.
+  const seats = Object.keys(args.roles ?? {});
+  if (seats.length >= 2) {
+    const watches = seats.map((seat) => ({ seat, ...roleWatch(seat, config, derived, checks, results) }));
+    const kept = watches.filter((w) => w.ok);
+    rigor.push({ item: "Crew priorities kept", earned: Math.min(4, kept.length), possible: Math.min(4, seats.length), detail: watches.map((w) => `${w.seat}: ${w.label} ${w.ok ? "✓" : "✗"} (${w.detail})`).join(" · ") });
+  }
   const rigorScore = rigor.reduce((s, r) => s + r.earned, 0);
 
   const penalties: Evaluation["penalties"] = [];
